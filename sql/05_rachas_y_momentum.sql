@@ -2,7 +2,9 @@
 -- Técnica: LAG(), promedio móvil con ventana, patrón "gaps and islands"
 -- (agrupar resultados consecutivos iguales para calcular la racha).
 --
--- Nota: se ordena por matches.finished_at -- como es a nivel de partida
+-- Recortado a la Temporada 9 de FACEIT (desde el 5 de agosto de 2026 en
+-- adelante) -- ver nota de "Alcance por temporada" en el README. Nota
+-- aparte: se ordena por matches.finished_at -- como es a nivel de partida
 -- (no de mapa), los mapas de una misma partida BO3 comparten fecha; para
 -- una racha 100% precisa dentro de un BO3 haría falta el orden real del
 -- mapa, que la API no expone. Para el resto (la gran mayoria, BO1) es exacto.
@@ -29,7 +31,7 @@ WITH partidas_ordenadas AS (
     FROM match_player_stats mps
     JOIN matches m ON mps.match_id = m.match_id
     JOIN players p ON mps.player_id = p.player_id
-    WHERE p.is_sa_country = 1
+    WHERE p.is_sa_country = 1 AND m.finished_at >= strftime('%s', '2026-08-05')
 ),
 con_grupo_de_racha AS (
     SELECT
@@ -77,5 +79,10 @@ SELECT
 FROM match_player_stats mps
 JOIN matches m ON mps.match_id = m.match_id
 JOIN players p ON mps.player_id = p.player_id
-WHERE p.nickname = 'VINI'  -- tiene la racha ganadora mas larga del top -- buen caso para mostrar
+WHERE p.nickname = 'VINI' AND m.finished_at >= strftime('%s', '2026-08-05')  -- tiene la racha ganadora mas larga del top -- buen caso para mostrar
 ORDER BY m.finished_at;
+
+-- Resultado (Temporada 9): VINI sigue con la racha activa más larga del
+-- top de la región, 13 partidas ganadas seguidas -- coincide con el
+-- resultado histórico porque sus 13 victorias ya caen enteras dentro de
+-- esta temporada.

@@ -1,0 +1,65 @@
+name: Actualizar datos y dashboard
+
+# Corre el pipeline completo (fetch -> build_database -> build_dashboard) una
+# vez por semana, sin intervención manual. Si hay datos nuevos, commitea la
+# base y el dashboard actualizados de vuelta a main -- eso dispara el
+# redeploy automático de Vercel.
+#
+# Necesita el secreto FACEIT_API_KEY (Settings -> Secrets and variables ->
+# Actions -> New repository secret) con tu API key del Developer Portal de
+# FACEIT. Nunca queda expuesta en el código ni en los logs.
+
+on:
+  schedule:
+    # Domingos 03:00 UTC (medianoche aprox. en Argentina/Brasil/Uruguay).
+    - cron: "0 3 * * 0"
+  workflow_dispatch: {}  # permite dispararlo a mano desde la pestaña "Actions"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-pipeline
+  cancel-in-progress: false  # nunca cortar una corrida a mitad de camino
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    # El paso 3 del fetch (detalle de partidas) es el lento -- con
+    # DEEP_DIVE_N=300 puede tardar 1.5-2h. Dejamos margen generoso.
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Extraer datos de FACEIT
+        env:
+          FACEIT_API_KEY: ${{ secrets.FACEIT_API_KEY }}
+        run: python fetch_faceit_data.py
+
+      - name: Cargar a SQLite
+        run: python build_database.py
+
+      - name: Regenerar el dashboard
+        run: python build_dashboard.py
+
+      - name: Commitear cambios (si los hay)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/processed/cs2_sa.db dashboard.html index.html
+          if git diff --cached --quiet; then
+            echo "Sin cambios -- no hay nada que commitear."
+          else
+            git commit -m "Actualización automática semanal de datos (Temporada 9)"
+            git push
+          fi

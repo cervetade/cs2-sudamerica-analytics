@@ -15,6 +15,16 @@ DB_PATH = Path(__file__).parent / "data" / "processed" / "cs2_sa.db"
 OUT_PATH = Path(__file__).parent / "dashboard.html"
 INDEX_PATH = Path(__file__).parent / "index.html"
 
+# Recorte de temporada: todos los hallazgos basados en PARTIDAS (no en el
+# ranking/ELO, que ya es una foto del estado actual) se limitan a partidas
+# jugadas desde el inicio de la Temporada 9 de FACEIT en adelante. FACEIT no
+# expone un campo "season" en los endpoints de partidas/historial de la Data
+# API v4 -- por eso el corte es una fecha fija que hay que actualizar a mano
+# cuando arranque una temporada nueva (no se detecta solo).
+SEASON_LABEL = "Temporada 9"
+SEASON_START_ISO = "2026-08-05"  # inicio Temporada 9 (soft ELO reset)
+SEASON_START_EPOCH = 1785888000  # unixepoch de SEASON_START_ISO 00:00 UTC
+
 
 def build_data(cur):
     data = {}
@@ -33,33 +43,37 @@ def build_data(cur):
         {"map": r[0].replace("de_", ""), "partidas": r[1], "rondas_promedio": r[2],
          "diferencia_rondas": r[3], "clasificacion": r[4]}
         for r in cur.execute("""
-            SELECT map, COUNT(*), ROUND(AVG(rounds_total), 1), ROUND(AVG(round_diff), 2),
-                CASE WHEN AVG(round_diff) <= 5 THEN 'Parejo' WHEN AVG(round_diff) <= 8 THEN 'Normal' ELSE 'Desbalanceado' END
-            FROM match_maps WHERE round_diff IS NOT NULL
-            GROUP BY map HAVING COUNT(*) >= 20
+            SELECT mm.map, COUNT(*), ROUND(AVG(mm.rounds_total), 1), ROUND(AVG(mm.round_diff), 2),
+                CASE WHEN AVG(mm.round_diff) <= 5 THEN 'Parejo' WHEN AVG(mm.round_diff) <= 8 THEN 'Normal' ELSE 'Desbalanceado' END
+            FROM match_maps mm JOIN matches m ON mm.match_id = m.match_id
+            WHERE mm.round_diff IS NOT NULL AND m.finished_at >= ?
+            GROUP BY mm.map HAVING COUNT(*) >= 20
             ORDER BY 4 ASC
-        """).fetchall()
+        """, (SEASON_START_EPOCH,)).fetchall()
     ]
 
     data["hs_vs_winrate"] = [
         {"rango": r[0], "winrate": r[1]}
         for r in cur.execute("""
-            SELECT CASE WHEN headshots_percent < 30 THEN '< 30%' WHEN headshots_percent < 45 THEN '30-45%'
-                WHEN headshots_percent < 60 THEN '45-60%' ELSE '60%+' END AS rango_hs,
-                ROUND(100.0 * SUM(team_won) / COUNT(*), 1)
-            FROM match_player_stats WHERE headshots_percent IS NOT NULL
-            GROUP BY rango_hs ORDER BY MIN(headshots_percent)
-        """).fetchall()
+            SELECT CASE WHEN mps.headshots_percent < 30 THEN '< 30%' WHEN mps.headshots_percent < 45 THEN '30-45%'
+                WHEN mps.headshots_percent < 60 THEN '45-60%' ELSE '60%+' END AS rango_hs,
+                ROUND(100.0 * SUM(mps.team_won) / COUNT(*), 1)
+            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+            WHERE mps.headshots_percent IS NOT NULL AND m.finished_at >= ?
+            GROUP BY rango_hs ORDER BY MIN(mps.headshots_percent)
+        """, (SEASON_START_EPOCH,)).fetchall()
     ]
 
     data["kd_vs_winrate"] = [
         {"rango": r[0], "winrate": r[1]}
         for r in cur.execute("""
-            SELECT CASE WHEN deaths = 0 THEN '2.0+' WHEN kills*1.0/deaths < 0.8 THEN '< 0.8'
-                WHEN kills*1.0/deaths < 1.0 THEN '0.8-1.0' WHEN kills*1.0/deaths < 1.3 THEN '1.0-1.3' ELSE '1.3+' END AS rango_kd,
-                ROUND(100.0 * SUM(team_won) / COUNT(*), 1)
-            FROM match_player_stats GROUP BY rango_kd ORDER BY MIN(kills*1.0/NULLIF(deaths,0))
-        """).fetchall()
+            SELECT CASE WHEN mps.deaths = 0 THEN '2.0+' WHEN mps.kills*1.0/mps.deaths < 0.8 THEN '< 0.8'
+                WHEN mps.kills*1.0/mps.deaths < 1.0 THEN '0.8-1.0' WHEN mps.kills*1.0/mps.deaths < 1.3 THEN '1.0-1.3' ELSE '1.3+' END AS rango_kd,
+                ROUND(100.0 * SUM(mps.team_won) / COUNT(*), 1)
+            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+            WHERE m.finished_at >= ?
+            GROUP BY rango_kd ORDER BY MIN(mps.kills*1.0/NULLIF(mps.deaths,0))
+        """, (SEASON_START_EPOCH,)).fetchall()
     ]
 
     data["jugadores_revelacion"] = [
@@ -67,10 +81,12 @@ def build_data(cur):
          "winrate_real": r[5], "percentil_elo": r[6], "percentil_kd": r[7], "diferencia": r[8]}
         for r in cur.execute("""
             WITH rendimiento_real AS (
-                SELECT player_id, COUNT(*) AS mapas_jugados,
-                    ROUND(AVG(kills * 1.0 / NULLIF(deaths, 0)), 2) AS kd_real,
-                    ROUND(100.0 * SUM(team_won) / COUNT(*), 1) AS winrate_real
-                FROM match_player_stats GROUP BY player_id HAVING COUNT(*) >= 5
+                SELECT mps.player_id, COUNT(*) AS mapas_jugados,
+                    ROUND(AVG(mps.kills * 1.0 / NULLIF(mps.deaths, 0)), 2) AS kd_real,
+                    ROUND(100.0 * SUM(mps.team_won) / COUNT(*), 1) AS winrate_real
+                FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+                WHERE m.finished_at >= ?
+                GROUP BY mps.player_id HAVING COUNT(*) >= 5
             ),
             comparacion AS (
                 SELECT p.nickname, p.country, p.faceit_elo, r.mapas_jugados, r.kd_real, r.winrate_real,
@@ -83,7 +99,7 @@ def build_data(cur):
                 ROUND(percentil_elo * 100, 0), ROUND(percentil_kd_real * 100, 0),
                 ROUND((percentil_kd_real - percentil_elo) * 100, 0) AS diferencia_sobre_lo_esperado
             FROM comparacion ORDER BY diferencia_sobre_lo_esperado DESC LIMIT 10
-        """).fetchall()
+        """, (SEASON_START_EPOCH,)).fetchall()
     ]
 
     data["rachas"] = [
@@ -95,7 +111,8 @@ def build_data(cur):
                         OR LAG(mps.team_won) OVER (PARTITION BY mps.player_id ORDER BY m.finished_at) IS NULL
                         THEN 1 ELSE 0 END AS empieza_racha_nueva
                 FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
-                JOIN players p ON mps.player_id = p.player_id WHERE p.is_sa_country = 1
+                JOIN players p ON mps.player_id = p.player_id
+                WHERE p.is_sa_country = 1 AND m.finished_at >= ?
             ),
             con_grupo AS (
                 SELECT *, SUM(empieza_racha_nueva) OVER (PARTITION BY player_id ORDER BY finished_at) AS grupo_racha
@@ -108,7 +125,7 @@ def build_data(cur):
             SELECT nickname, CASE WHEN team_won=1 THEN 'Ganando' ELSE 'Perdiendo' END, largo_racha
             FROM rachas r WHERE fin = (SELECT MAX(fin) FROM rachas r2 WHERE r2.player_id = r.player_id)
             ORDER BY (CASE WHEN team_won=1 THEN largo_racha ELSE 0 END) DESC LIMIT 10
-        """).fetchall()
+        """, (SEASON_START_EPOCH,)).fetchall()
     ]
 
     data["desgaste"] = [
@@ -120,16 +137,25 @@ def build_data(cur):
                 ROUND(AVG(mps.headshots_percent), 1),
                 COUNT(*)
             FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
-            WHERE m.has_valid_duration = 1 GROUP BY bucket ORDER BY MIN(m.duration_minutes)
-        """).fetchall()
+            WHERE m.has_valid_duration = 1 AND m.finished_at >= ?
+            GROUP BY bucket ORDER BY MIN(m.duration_minutes)
+        """, (SEASON_START_EPOCH,)).fetchall()
     ]
 
     data["resumen"] = {
         "total_jugadores": cur.execute("SELECT COUNT(*) FROM players").fetchone()[0],
         "jugadores_sa": cur.execute("SELECT COUNT(*) FROM players WHERE is_sa_country=1").fetchone()[0],
-        "total_partidas": cur.execute("SELECT COUNT(*) FROM matches").fetchone()[0],
-        "total_mapas": cur.execute("SELECT COUNT(*) FROM match_maps").fetchone()[0],
-        "filas_stats": cur.execute("SELECT COUNT(*) FROM match_player_stats").fetchone()[0],
+        "total_partidas": cur.execute("SELECT COUNT(*) FROM matches WHERE finished_at >= ?", (SEASON_START_EPOCH,)).fetchone()[0],
+        "total_mapas": cur.execute("""
+            SELECT COUNT(*) FROM match_maps mm JOIN matches m ON mm.match_id = m.match_id
+            WHERE m.finished_at >= ?
+        """, (SEASON_START_EPOCH,)).fetchone()[0],
+        "filas_stats": cur.execute("""
+            SELECT COUNT(*) FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+            WHERE m.finished_at >= ?
+        """, (SEASON_START_EPOCH,)).fetchone()[0],
+        "season_label": SEASON_LABEL,
+        "season_start": SEASON_START_ISO,
     }
 
     data["mapa_pais"] = [
@@ -139,18 +165,20 @@ def build_data(cur):
             WITH baseline_pais AS (
                 SELECT p.country, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_base, COUNT(*) AS filas_base
                 FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
-                WHERE p.country IN ('br','ar','cl') GROUP BY p.country
+                JOIN matches m ON mps.match_id = m.match_id
+                WHERE p.country IN ('br','ar','cl') AND m.finished_at >= ? GROUP BY p.country
             ),
             por_mapa AS (
                 SELECT p.country, mps.map, COUNT(*) AS filas, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_mapa
                 FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
-                WHERE p.country IN ('br','ar','cl') GROUP BY p.country, mps.map HAVING COUNT(*) >= 30
+                JOIN matches m ON mps.match_id = m.match_id
+                WHERE p.country IN ('br','ar','cl') AND m.finished_at >= ? GROUP BY p.country, mps.map HAVING COUNT(*) >= 30
             )
             SELECT UPPER(pm.country), pm.map, pm.filas, pm.winrate_mapa, b.winrate_base,
                 ROUND(pm.winrate_mapa - b.winrate_base, 1)
             FROM por_mapa pm JOIN baseline_pais b ON pm.country = b.country
             ORDER BY pm.country, 6 DESC
-        """).fetchall()
+        """, (SEASON_START_EPOCH, SEASON_START_EPOCH)).fetchall()
     ]
 
     data["elo_por_pais"] = [
@@ -172,13 +200,13 @@ def build_data(cur):
                      WHEN hora BETWEEN 12 AND 17 THEN 'Tarde (12-17h)'
                      WHEN hora BETWEEN 18 AND 23 THEN 'Noche (18-23h)'
                      ELSE 'Madrugada (0-5h)' END AS franja,
-                COUNT(*), ROUND(100.0*COUNT(*)/(SELECT COUNT(*) FROM matches),1)
+                COUNT(*), ROUND(100.0*COUNT(*)/(SELECT COUNT(*) FROM matches WHERE finished_at >= ?),1)
             FROM (
                 SELECT CAST(strftime('%H', datetime(finished_at - 3*3600, 'unixepoch')) AS INTEGER) AS hora
-                FROM matches WHERE finished_at IS NOT NULL
+                FROM matches WHERE finished_at IS NOT NULL AND finished_at >= ?
             )
             GROUP BY franja ORDER BY 2 DESC
-        """).fetchall()
+        """, (SEASON_START_EPOCH, SEASON_START_EPOCH)).fetchall()
     ]
 
     return data
@@ -393,6 +421,11 @@ TEMPLATE = r"""<!doctype html>
     font-size: 10.5px; font-weight: 700; color: var(--ink-muted); background: var(--page);
     border-radius: 999px; padding: 1.5px 8px;
   }
+  .season-badge {
+    display: inline-flex; align-items: center; font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 600; color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent);
+    border-radius: 999px; padding: 2px 9px; margin-left: 8px; vertical-align: middle;
+  }
   section.panel .sub { color: var(--ink-secondary); font-size: 12.5px; margin: 0 0 16px; }
   section.panel .finding {
     color: var(--ink-secondary); font-size: 12.5px; margin-top: 14px; line-height: 1.6;
@@ -534,8 +567,8 @@ TEMPLATE = r"""<!doctype html>
   <main>
     <div class="topbar">
       <div>
-        <h1>Dashboard</h1>
-        <p>CS2 competitivo en Sudamérica — hallazgos navegables, sin correr una sola query.</p>
+        <h1>Dashboard <span class="season-badge">Temporada 9</span></h1>
+        <p>CS2 competitivo en Sudamérica — hallazgos navegables, sin correr una sola query. Partidas desde el inicio de la Temporada 9 de FACEIT (5 ago 2026); ranking/ELO reflejan el estado actual.</p>
       </div>
       <a class="btn-primary" href="https://github.com/cervetade/cs2-sudamerica-analytics" target="_blank" rel="noopener">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -560,7 +593,7 @@ TEMPLATE = r"""<!doctype html>
           <div><div class="chart-wrap" id="chart-hs"></div></div>
           <div><div class="chart-wrap" id="chart-kd"></div></div>
         </div>
-        <p class="finding">Los cuatro grupos de headshot % ganan casi lo mismo — <strong>el aim solo no explica las victorias</strong>. El K/D sí importa, y bastante: por debajo de 0.8 la win rate se hunde a 22%, arriba de 1.3 sube a 85%.</p>
+        <p class="finding">Los cuatro grupos de headshot % ganan casi lo mismo — <strong>el aim solo no explica las victorias</strong>. El K/D sí importa, y bastante: por debajo de 0.8 la win rate se hunde a 22.5%, arriba de 1.3 sube a 84.6%.</p>
       </section>
 
       <section class="panel" id="s-desgaste">
@@ -570,7 +603,7 @@ TEMPLATE = r"""<!doctype html>
           <div><div class="chart-wrap" id="chart-desgaste-kd"></div></div>
           <div><div class="chart-wrap" id="chart-desgaste-hs"></div></div>
         </div>
-        <p class="finding">El K/D promedio cae de <strong>1.19 a 1.01</strong> y el headshot % de <strong>55.7% a 49.2%</strong> entre partidas cortas (≤30 min) y largas (60+ min).</p>
+        <p class="finding">El K/D promedio cae de <strong>1.18 a 1.01</strong> y el headshot % de <strong>55.8% a 49.0%</strong> entre partidas cortas (≤30 min) y largas (60+ min).</p>
       </section>
 
       <section class="panel" id="s-mapas">
@@ -589,7 +622,7 @@ TEMPLATE = r"""<!doctype html>
         <div class="panel-head"><h2>Jugadores "revelación"</h2><span class="tag">06</span></div>
         <p class="sub">ELO relativamente bajo para su nivel, pero rendimiento real muy por encima de lo esperado — clic en una columna para ordenar</p>
         <div id="table-revelacion"></div>
-        <p class="finding">Apareció <strong>coldzera</strong> — el histórico jugador profesional brasileño — con un K/D real de 1.95, el más alto de todos los sudamericanos con muestra suficiente para el análisis.</p>
+        <p class="finding">La lidera <strong>lukaazera</strong> (AR), con K/D 1.5 y un rendimiento muy por encima de lo que su ELO haría esperar. También aparece <strong>coldzera</strong> — el histórico jugador profesional brasileño — con el K/D real más alto de la lista (1.95), aunque esta temporada no lidera el ranking: su ELO ya es alto de base, así que tiene menos margen para "sorprender".</p>
       </section>
 
       <section class="panel" id="s-mapapais">
@@ -600,7 +633,7 @@ TEMPLATE = r"""<!doctype html>
           <div><h3>Brasil</h3><div class="chart-wrap" id="chart-mapapais-br"></div></div>
           <div><h3>Chile</h3><div class="chart-wrap" id="chart-mapapais-cl"></div></div>
         </div>
-        <p class="finding">La intuición decía Argentina-nuke, pero los números dicen otra cosa: <strong>Chile domina de_nuke</strong> muy por encima de su propio promedio (61.5% vs. 54% base). El mapa fuerte de Argentina es de_cache; el débil, de_anubis. Brasil es el más parejo de los tres — nunca se desvía más de ~3 puntos en ningún mapa.</p>
+        <p class="finding">La intuición decía Argentina-nuke, pero los números dicen otra cosa: <strong>Chile domina de_nuke</strong> muy por encima de su propio promedio (63.9% vs. 54% base, sobre 36 partidas). El mapa fuerte de Argentina es de_cache; el débil, de_anubis. Brasil es el más parejo de los tres — su mayor desvío esta temporada es de apenas -3.3 puntos, en de_inferno.</p>
       </section>
 
       <section class="panel" id="s-elo">
@@ -614,7 +647,7 @@ TEMPLATE = r"""<!doctype html>
         <div class="panel-head"><h2>¿A qué hora se juega más CS2 en Sudamérica?</h2><span class="tag">09</span></div>
         <p class="sub">Partidas por franja horaria, aproximado a UTC-3 (horario más común de la región)</p>
         <div class="chart-wrap" id="chart-hora"></div>
-        <p class="finding">Casi la mitad de las partidas (45.5%) se juegan entre las 18h y las 23h. Sumando la madrugada, el bloque noche + trasnoche se lleva más del 70% del total — entre las 6 y las 11 de la mañana el volumen cae a un 1.7%.</p>
+        <p class="finding">Casi la mitad de las partidas (45.0%) se juegan entre las 18h y las 23h. Sumando la madrugada (27.7%), el bloque noche + trasnoche se lleva más del 72% del total — entre las 6 y las 11 de la mañana el volumen cae a un 1.6%.</p>
       </section>
 
     </div>

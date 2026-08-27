@@ -4,6 +4,12 @@ Radiografía del CS2 competitivo en Sudamérica: de dónde salen los mejores jug
 
 **[→ Ver el dashboard interactivo](./dashboard.html)** — los mismos hallazgos, pero navegables (hover para el detalle, tabla ordenable).
 
+### Alcance por temporada
+
+Los hallazgos que se calculan sobre **partidas** (2, 3, 4, 5, 6, 7 y 9) están recortados a la **Temporada 9** de FACEIT — desde el 5 de agosto de 2026 en adelante. Los que se calculan sobre el **ranking/ELO** (1 y 8) son una foto del estado actual, que ya incorpora el reset de temporada por sí solo.
+
+La Data API v4 de FACEIT no expone un campo "temporada" en los endpoints de partidas o historial (sí existe para ligas y hubs), así que el recorte es una fecha fija (`SEASON_START_EPOCH` en `build_dashboard.py`, y `strftime('%s', '2026-08-05')` en cada `sql/*.sql` que lo necesita) que hay que actualizar a mano cuando arranque una temporada nueva — no se detecta solo.
+
 ## Hallazgos
 
 ### 1. Brasil concentra 7 de cada 10 jugadores top de la región
@@ -14,19 +20,19 @@ Sobre los jugadores sudamericanos que entran al top 1000 del ranking de FACEIT e
 
 ### 2. El headshot % no predice quién gana
 
-Los que ganan una partida tienen bastantes más kills que los que pierden (16.8 vs 13.8 en promedio) — hasta ahí, nada raro. Pero el % de headshots es prácticamente igual entre ganadores y perdedores, y el grupo con MÁS headshots (60%+) tiene la win rate más baja de los cuatro grupos. El aim solo no gana partidas de CS2 en Sudamérica.
+Los que ganan una partida tienen bastantes más kills que los que pierden (16.9 vs 13.8 en promedio) — hasta ahí, nada raro. Pero el % de headshots es prácticamente igual entre ganadores y perdedores (53.4% vs 54.6%), y el grupo con MÁS headshots (60%+) tiene la win rate más baja de los cuatro grupos (47.7%). El aim solo no gana partidas de CS2 en Sudamérica.
 
 ![Headshot % vs win rate](./charts/02_headshots_vs_winrate.png)
 
 ### 3. El desgaste por partidas largas es real
 
-Comparando el rendimiento según la duración real de la partida: el K/D promedio cae de 1.19 en partidas cortas (≤30 min) a 1.01 en partidas de más de una hora, y el headshot % cae de 55.7% a 49.2%. La caída es consistente en ambas métricas — hay desgaste real, no es ruido.
+Comparando el rendimiento según la duración real de la partida: el K/D promedio cae de 1.18 en partidas cortas (≤30 min) a 1.01 en partidas de más de una hora, y el headshot % cae de 55.8% a 49.0%. La caída es consistente en ambas métricas — hay desgaste real, no es ruido.
 
 ![Desgaste por duración](./charts/03_desgaste_por_duracion.png)
 
 ### 4. Un nombre reconocible entre los "jugadores revelación"
 
-Cruzando el ELO actual de cada jugador contra su rendimiento real en las partidas analizadas, apareció **coldzera** — el histórico jugador profesional brasileño — con un ELO relativamente bajo para su nivel real pero un K/D de 1.95 y 100% de percentil de rendimiento en la muestra. Setup completo en [`sql/04_jugadores_revelacion.sql`](./sql/04_jugadores_revelacion.sql).
+Cruzando el ELO actual de cada jugador contra su rendimiento real en las partidas de la temporada, la lista la lidera **lukaazera** (AR): K/D 1.5 y un rendimiento muy por encima de lo que su ELO haría esperar. También aparece **coldzera** — el histórico jugador profesional brasileño — con el K/D real más alto de toda la lista (1.95, 100% de percentil de rendimiento), aunque esta temporada no encabeza el ranking por diferencia: su ELO ya es alto de base, así que tiene menos margen para "sorprender" contra lo esperado. Setup completo en [`sql/04_jugadores_revelacion.sql`](./sql/04_jugadores_revelacion.sql).
 
 ### 5. Rachas: 13 victorias seguidas
 
@@ -34,11 +40,11 @@ El jugador con la racha activa más larga del top de la región lleva 13 partida
 
 ### 6. `de_cache` es el mapa más parejo de la región
 
-Entre los mapas con muestra suficiente (20+ partidas), `de_cache` tiene la menor diferencia de rondas promedio (4.99), es decir, las partidas ahí terminan más ajustadas que en el resto del pool competitivo.
+Entre los mapas con muestra suficiente (20+ partidas), `de_cache` tiene la menor diferencia de rondas promedio (5.04), es decir, las partidas ahí terminan más ajustadas que en el resto del pool competitivo.
 
 ### 7. El mapa "propio" de cada país no es el que se supone
 
-En vez de comparar win rate cruda entre países (cada uno arranca de un nivel promedio distinto), se midió cuánto se desvía cada país de *su propio* promedio en cada mapa. La intuición decía Argentina-`de_nuke`, pero los datos dicen otra cosa: **Chile domina `de_nuke`** muy por encima de su costumbre (61.5% de win rate ahí vs. 54% de base). El mapa fuerte de Argentina es `de_cache` (+5.5 puntos sobre su propio promedio); el débil, `de_anubis` (-6.2). Brasil es el más parejo de los tres — nunca se desvía más de ~3 puntos en ningún mapa. Setup en [`sql/07_dominancia_por_mapa_y_pais.sql`](./sql/07_dominancia_por_mapa_y_pais.sql).
+En vez de comparar win rate cruda entre países (cada uno arranca de un nivel promedio distinto), se midió cuánto se desvía cada país de *su propio* promedio en cada mapa. La intuición decía Argentina-`de_nuke`, pero los datos dicen otra cosa: **Chile domina `de_nuke`** muy por encima de su costumbre (63.9% de win rate ahí vs. 54% de base, sobre 36 partidas). El mapa fuerte de Argentina es `de_cache` (+8.6 puntos sobre su propio promedio); el débil, `de_anubis` (-6.4). Brasil es el más parejo de los tres — su mayor desvío esta temporada es de apenas -3.3 puntos, en `de_inferno`. Setup en [`sql/07_dominancia_por_mapa_y_pais.sql`](./sql/07_dominancia_por_mapa_y_pais.sql).
 
 ### 8. Brasil no solo tiene más jugadores — también el ELO promedio más alto
 
@@ -46,7 +52,7 @@ En vez de comparar win rate cruda entre países (cada uno arranca de un nivel pr
 
 ### 9. Sudamérica juega de noche, fuerte
 
-Agrupando las partidas por franja horaria (aprox. UTC-3): el 45.5% se juega entre las 18h y las 23h, y sumando la madrugada (0-5h, 27%) el bloque noche + trasnoche se lleva más del 70% del total. Entre las 6 y las 11 de la mañana el volumen se cae a un 1.7% — casi nadie juega competitivo a esa hora. Ver [`sql/09_hora_pico_de_juego.sql`](./sql/09_hora_pico_de_juego.sql).
+Agrupando las partidas por franja horaria (aprox. UTC-3): el 45.0% se juega entre las 18h y las 23h, y sumando la madrugada (0-5h, 27.7%) el bloque noche + trasnoche se lleva más del 72% del total. Entre las 6 y las 11 de la mañana el volumen se cae a un 1.6% — casi nadie juega competitivo a esa hora. Ver [`sql/09_hora_pico_de_juego.sql`](./sql/09_hora_pico_de_juego.sql).
 
 ## Cómo se armó
 
@@ -54,7 +60,7 @@ Los datos se extrajeron con [`fetch_faceit_data.py`](./fetch_faceit_data.py) con
 
 1. Baja el ranking completo (top 1000) de la región **SA** de CS2, paginado.
 2. Para esos 1000, suma sus stats de por vida (partidas, win rate, K/D, HS%).
-3. Para el top 150 (los de mayor nivel), baja el historial de sus últimas 30 partidas.
+3. Para el top 300 (los de mayor nivel), baja el historial de sus últimas 30 partidas.
 4. Para cada partida única de ese grupo, baja el detalle por jugador/mapa y la duración real de la partida.
 
 La API key nunca se hardcodea — se lee de la variable de entorno `FACEIT_API_KEY`.
@@ -66,7 +72,7 @@ La región **SA** de FACEIT es la cola de *servidores*, no una garantía de naci
 ### Notas de calidad de datos
 
 - 8 partidas de torneos/ligas organizadas (no de la cola pública) no tienen duración real registrada por la API — quedan marcadas con `has_valid_duration = 0` y excluidas del análisis de desgaste.
-- El detalle de partidas se bajó solo para el top 150 jugadores (no los 1000), para mantener la corrida del pipeline en un tiempo razonable.
+- El detalle de partidas se bajó solo para el top 300 jugadores (no los 1000), para mantener la corrida del pipeline en un tiempo razonable. Chile, por ejemplo, solo mete ~12 de sus 47 jugadores dentro de ese top 300 — por eso sus muestras por mapa (hallazgo 7) son más chicas que las de Argentina o Brasil.
 
 ### Modelo de datos
 
@@ -86,7 +92,9 @@ cs2-sudamerica-analytics/
 │   ├── raw/                   # CSVs crudos (salida del extractor)
 │   └── processed/cs2_sa.db    # base SQLite lista para consultar
 ├── sql/                       # una query por hallazgo, comentada
-└── charts/                    # gráficos del README
+├── charts/                    # gráficos del README
+└── .github/workflows/
+    └── refresh.yml             # actualización automática semanal (ver abajo)
 ```
 
 ## Cómo correrlo
@@ -121,6 +129,16 @@ sqlite3 data/processed/cs2_sa.db < sql/01_dominancia_por_pais.sql
 4. "Deploy". Vercel sirve `index.html` en la raíz del dominio que te da (`cs2-sudamerica-analytics.vercel.app` o el que elijas).
 
 Cada vez que actualices el dashboard (`python build_dashboard.py`) y hagas push a `main`, Vercel lo redespliega solo.
+
+### Se mantiene actualizado solo (GitHub Actions)
+
+El proyecto corre su propio pipeline una vez por semana sin intervención manual, vía [`.github/workflows/refresh.yml`](./.github/workflows/refresh.yml):
+
+1. Cada domingo (o manualmente desde la pestaña "Actions" del repo), un runner de GitHub instala las dependencias y corre `fetch_faceit_data.py` → `build_database.py` → `build_dashboard.py` en secuencia.
+2. Si algo cambió (nuevos datos de la temporada), commitea `data/processed/cs2_sa.db`, `dashboard.html` e `index.html` de vuelta a `main` con un usuario bot.
+3. Ese push dispara el redeploy automático de Vercel — el dashboard queda al día sin que nadie tenga que tocar nada.
+
+Para activarlo en tu propio fork: `Settings → Secrets and variables → Actions → New repository secret`, nombre `FACEIT_API_KEY`, valor tu API key. El workflow ya está armado para leerla desde ahí — nunca queda expuesta en el código ni en los logs. También podés dispararlo a mano desde la pestaña "Actions" ("Run workflow") si no querés esperar al domingo.
 
 ## Stack
 

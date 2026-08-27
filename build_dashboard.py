@@ -169,6 +169,25 @@ TEMPLATE = r"""<!doctype html>
     --seq5-4: #1c5cab;
     --seq5-5: #104281;
     --good: #0ca30c;
+
+    /* colores por país (identidad de bandera, no la rampa categórica default) */
+    --c-br: #0ca34f;   /* Brasil: verde */
+    --c-ar: #4fa8d8;   /* Argentina: celeste */
+    --c-cl: #d1453b;   /* Chile: rojo */
+    --c-uy: #8aa4c4;   /* Uruguay: celeste apagado, para no pisar a AR */
+    --c-py: #c9a178;   /* Paraguay: terracota */
+    --c-ve: #d9c66b;   /* Venezuela: dorado */
+    --c-pe: #b98a94;   /* Perú: rojo malva apagado, para no pisar a CL */
+    --c-bo: #a3b18a;   /* Bolivia: verde salvia apagado, para no pisar a BR */
+
+    /* colores por mapa (paleta reconocible de cada mapa en CS2) */
+    --m-de_mirage: #eda100;   /* amarillo arena */
+    --m-de_dust2: #b08968;    /* marrón polvo árabe */
+    --m-de_inferno: #d1453b;  /* rojo fuego */
+    --m-de_cache: #8b2f2a;    /* rojo ladrillo soviético */
+    --m-de_nuke: #3aa0c9;     /* celeste industrial */
+    --m-de_anubis: #c9962c;   /* dorado/bronce egipcio */
+    --m-de_ancient: #6b8f5a;  /* verde musgo de templo */
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -195,6 +214,23 @@ TEMPLATE = r"""<!doctype html>
       --seq5-4: #184f95;
       --seq5-5: #0d366b;
       --good: #1ec01e;
+
+      --c-br: #22c168;
+      --c-ar: #6cbfe8;
+      --c-cl: #e2645a;
+      --c-uy: #9db4d1;
+      --c-py: #d4b28c;
+      --c-ve: #e3d17e;
+      --c-pe: #c79aa3;
+      --c-bo: #b3c09c;
+
+      --m-de_mirage: #f5b833;
+      --m-de_dust2: #c9a281;
+      --m-de_inferno: #e2645a;
+      --m-de_cache: #b04840;
+      --m-de_nuke: #5bc0de;
+      --m-de_anubis: #e0b355;
+      --m-de_ancient: #8bb377;
     }
   }
 
@@ -631,8 +667,9 @@ function horizontalBars(containerId, items, opts) {
   });
 })();
 
+const countryColors = { BR: "var(--c-br)", AR: "var(--c-ar)", CL: "var(--c-cl)", UY: "var(--c-uy)", PY: "var(--c-py)", VE: "var(--c-ve)", PE: "var(--c-pe)", BO: "var(--c-bo)" };
 verticalBars("chart-paises", DATA.dominancia_por_pais.map(d => ({
-  label: d.country, value: d.n, valueLabel: `${d.n}`, color: "var(--blue)",
+  label: d.country, value: d.n, valueLabel: `${d.n}`, color: countryColors[d.country] || "var(--blue)",
   tip: `<b>${d.country}</b>: ${d.n} jugadores (${d.pct}%)`
 })), { ariaLabel: "Jugadores por país" });
 
@@ -661,7 +698,8 @@ verticalBars("chart-desgaste-hs", DATA.desgaste.map(d => ({
 
 const mapasSorted = [...DATA.mapas].sort((a, b) => a.diferencia_rondas - b.diferencia_rondas);
 horizontalBars("chart-mapas", mapasSorted.map((d, i) => ({
-  label: `de_${d.map}` + (i === 0 ? "  ★" : ""), value: d.diferencia_rondas, valueLabel: d.diferencia_rondas, color: "var(--blue)",
+  label: `de_${d.map}` + (i === 0 ? "  ★" : ""), value: d.diferencia_rondas, valueLabel: d.diferencia_rondas,
+  color: `var(--m-de_${d.map}, var(--blue))`,
   tip: `<b>de_${d.map}</b>: diferencia de ${d.diferencia_rondas} rondas en promedio (${d.partidas} partidas, ${d.clasificacion})`
 })), { max: Math.max(...mapasSorted.map(d => d.diferencia_rondas)) * 1.15, ariaLabel: "Diferencia de rondas por mapa" });
 

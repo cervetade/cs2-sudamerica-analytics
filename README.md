@@ -2,6 +2,8 @@
 
 Radiografía del CS2 competitivo en Sudamérica: de dónde salen los mejores jugadores de la región, qué mapas son más parejos, si el aim solo alcanza para ganar, y si el desgaste de partidas largas se nota en los números. Todo con datos reales extraídos directamente de la API de FACEIT — no un dataset armado de Kaggle.
 
+**[→ Ver el dashboard interactivo](./dashboard.html)** — los mismos hallazgos, pero navegables (hover para el detalle, tabla ordenable).
+
 ## Hallazgos
 
 ### 1. Brasil concentra 7 de cada 10 jugadores top de la región
@@ -54,6 +56,10 @@ La región **SA** de FACEIT es la cola de *servidores*, no una garantía de naci
 - 8 partidas de torneos/ligas organizadas (no de la cola pública) no tienen duración real registrada por la API — quedan marcadas con `has_valid_duration = 0` y excluidas del análisis de desgaste.
 - El detalle de partidas se bajó solo para el top 150 jugadores (no los 1000), para mantener la corrida del pipeline en un tiempo razonable.
 
+### Modelo de datos
+
+Diagrama entidad-relación de las 5 tablas y cómo se conectan: [`docs/ERD.md`](./docs/ERD.md).
+
 ## Estructura del repo
 
 ```
@@ -61,6 +67,9 @@ cs2-sudamerica-analytics/
 ├── fetch_faceit_data.py       # extractor: FACEIT API -> CSVs crudos
 ├── build_database.py          # limpieza + carga a SQLite
 ├── make_charts.py             # genera los gráficos de este README
+├── dashboard.html             # dashboard interactivo (ver online o abrir local)
+├── docs/
+│   └── ERD.md                 # diagrama entidad-relación de la base
 ├── data/
 │   ├── raw/                   # CSVs crudos (salida del extractor)
 │   └── processed/cs2_sa.db    # base SQLite lista para consultar
@@ -83,10 +92,15 @@ python build_database.py
 # 3. Regenerar los gráficos
 python make_charts.py
 
-# 4. Explorar las queries
+# 4. Regenerar el dashboard interactivo
+python build_dashboard.py
+
+# 5. Explorar las queries
 sqlite3 data/processed/cs2_sa.db < sql/01_dominancia_por_pais.sql
 ```
 
+`dashboard.html` es autocontenido (HTML + CSS + JS + datos en un solo archivo, sin dependencias externas) — se puede abrir directo en el navegador o servir con GitHub Pages.
+
 ## Stack
 
-Python (extracción y limpieza) · SQLite · SQL (análisis) · Matplotlib (gráficos) · [FACEIT Data API v4](https://docs.faceit.com/docs/data-api/)
+Python (extracción y limpieza) · SQLite · SQL (análisis) · Matplotlib (gráficos) · JavaScript/SVG vanilla (dashboard interactivo) · [FACEIT Data API v4](https://docs.faceit.com/docs/data-api/)

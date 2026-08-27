@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CS2 Sudamérica — Dashboard interactivo</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb;
+    --page: #f9f9f7;
+    --ink-primary: #0b0b0b;
+    --ink-secondary: #52514e;
+    --ink-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --blue: #2a78d6;
+    --orange: #eb6834;
+    --seq-1: #86b6ef;
+    --seq-2: #5598e7;
+    --seq-3: #2a78d6;
+    --seq-4: #184f95;
+    --seq5-1: #86b6ef;
+    --seq5-2: #5598e7;
+    --seq5-3: #2a78d6;
+    --seq5-4: #1c5cab;
+    --seq5-5: #104281;
+    --good: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface: #1a1a19;
+      --page: #0d0d0d;
+      --ink-primary: #ffffff;
+      --ink-secondary: #c3c2b7;
+      --ink-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --blue: #3987e5;
+      --orange: #d95926;
+      --seq-1: #6da7ec;
+      --seq-2: #3987e5;
+      --seq-3: #256abf;
+      --seq-4: #104281;
+      --seq5-1: #6da7ec;
+      --seq5-2: #3987e5;
+      --seq5-3: #256abf;
+      --seq5-4: #184f95;
+      --seq5-5: #0d366b;
+      --good: #0ca30c;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--page);
+    color: var(--ink-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  header.hero { padding: 28px 0 20px; border-bottom: 1px solid var(--border); }
+  header.hero h1 { font-size: 1.6rem; margin: 0 0 8px; }
+  header.hero p { color: var(--ink-secondary); margin: 0 0 20px; max-width: 680px; font-size: 0.98rem; }
+  header.hero .backlink { font-size: 0.85rem; }
+  header.hero .backlink a { color: var(--blue); text-decoration: none; }
+  header.hero .backlink a:hover { text-decoration: underline; }
+
+  .stat-tiles { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+  .stat-tile {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; min-width: 130px;
+  }
+  .stat-tile .num { font-size: 1.5rem; font-weight: 700; }
+  .stat-tile .label { font-size: 0.78rem; color: var(--ink-muted); margin-top: 2px; }
+
+  section.card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px 24px 20px; margin-top: 22px;
+  }
+  section.card h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  section.card .sub { color: var(--ink-secondary); font-size: 0.88rem; margin: 0 0 16px; }
+  section.card .finding { color: var(--ink-secondary); font-size: 0.88rem; margin-top: 14px; line-height: 1.55; }
+  section.card .finding strong { color: var(--ink-primary); }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  @media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .chart-wrap { position: relative; }
+  svg text { fill: var(--ink-secondary); font-family: inherit; }
+  svg .value-label { fill: var(--ink-primary); font-weight: 600; }
+  svg .axis-label { fill: var(--ink-muted); font-size: 10.5px; }
+  svg .baseline { stroke: var(--baseline); stroke-width: 1; }
+  svg .ref-line { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 3 3; }
+  .bar { cursor: pointer; transition: opacity 0.12s; }
+  .bar:hover { opacity: 0.82; }
+
+  .tooltip {
+    position: absolute; pointer-events: none; background: var(--ink-primary); color: var(--surface);
+    font-size: 0.78rem; padding: 6px 10px; border-radius: 6px; white-space: nowrap;
+    transform: translate(-50%, -100%); opacity: 0; transition: opacity 0.1s; z-index: 10;
+    top: 0; left: 0;
+  }
+  .tooltip.show { opacity: 0.96; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 4px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--ink-muted); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.02em; cursor: pointer; user-select: none; }
+  th:hover { color: var(--ink-primary); }
+  th.sorted::after { content: " \25BE"; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:hover td { background: color-mix(in srgb, var(--blue) 6%, transparent); }
+  .country-tag { color: var(--ink-muted); font-size: 0.78rem; }
+
+  .badge {
+    display: inline-block; font-size: 0.72rem; padding: 2px 8px; border-radius: 999px;
+    background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); font-weight: 600;
+    margin-left: 8px;
+  }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.78rem; color: var(--ink-secondary); margin-top: 10px; }
+  .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  footer { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--ink-muted); font-size: 0.82rem; }
+  footer a { color: var(--blue); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>CS2 Sudamérica — Dashboard interactivo</h1>
+    <p>Los mismos hallazgos del README, pero navegables: pasá el mouse sobre las barras para ver el detalle exacto y ordená la tabla de jugadores por la columna que quieras. Datos extraídos directo de la <a href="https://docs.faceit.com/docs/data-api/" style="color:var(--blue)">API de FACEIT</a>, sin datasets prearmados.</p>
+    <div class="stat-tiles" id="stat-tiles"></div>
+    <div class="backlink" style="margin-top:16px;"><a href="./README.md">&larr; Volver al README</a></div>
+  </header>
+
+  <section class="card">
+    <h2>1. Brasil concentra la mayoría de los jugadores top de la región</h2>
+    <p class="sub">Jugadores sudamericanos en el top 1000 del ranking FACEIT (región SA), por país</p>
+    <div class="chart-wrap" id="chart-paises"></div>
+  </section>
+
+  <section class="card">
+    <h2>2. ¿El aim solo alcanza para ganar?</h2>
+    <p class="sub">Win rate real según el rango de headshot % y de K/D del jugador en la partida — la línea punteada marca el 50%, lo esperado si el resultado fuera puro azar</p>
+    <div class="grid-2">
+      <div>
+        <div class="chart-wrap" id="chart-hs"></div>
+      </div>
+      <div>
+        <div class="chart-wrap" id="chart-kd"></div>
+      </div>
+    </div>
+    <p class="finding">Los cuatro grupos de headshot % ganan casi lo mismo — <strong>el aim solo no explica las victorias</strong>. El K/D sí importa, y bastante: por debajo de 0.8 la win rate se hunde a 22%, arriba de 1.3 sube a 85%. No es la precisión, es la eficiencia neta de kills contra muertes.</p>
+  </section>
+
+  <section class="card">
+    <h2>3. El desgaste por partidas largas es real</h2>
+    <p class="sub">Rendimiento promedio según la duración real de la partida (excluye partidas de torneo sin duración registrada)</p>
+    <div class="grid-2">
+      <div>
+        <div class="chart-wrap" id="chart-desgaste-kd"></div>
+      </div>
+      <div>
+        <div class="chart-wrap" id="chart-desgaste-hs"></div>
+      </div>
+    </div>
+    <p class="finding">El K/D promedio cae de <strong>1.19 a 1.01</strong> y el headshot % de <strong>55.7% a 49.2%</strong> entre partidas cortas (≤30 min) y largas (60+ min). La caída es consistente en ambas métricas — hay desgaste real, no es ruido.</p>
+  </section>
+
+  <section class="card">
+    <h2>4. ¿Qué mapa es más parejo?</h2>
+    <p class="sub">Diferencia de rondas promedio entre ganador y perdedor, por mapa (mínimo 20 partidas jugadas)</p>
+    <div class="chart-wrap" id="chart-mapas"></div>
+  </section>
+
+  <section class="card">
+    <h2>5. Rachas activas</h2>
+    <p class="sub">Los jugadores con más partidas ganadas seguidas ahora mismo, calculado con LAG() y "gaps and islands"</p>
+    <div class="chart-wrap" id="chart-rachas"></div>
+  </section>
+
+  <section class="card">
+    <h2>6. Jugadores "revelación"</h2>
+    <p class="sub">ELO relativamente bajo para su nivel, pero rendimiento real muy por encima de lo esperado (clic en una columna para ordenar)</p>
+    <div id="table-revelacion"></div>
+    <p class="finding">Apareció <strong>coldzera</strong> — el histórico jugador profesional brasileño — con un K/D real de 1.95 y 100% de percentil de rendimiento en la muestra, pese a no tener el ELO más alto del grupo.</p>
+  </section>
+
+  <footer>
+    Parte del proyecto <a href="https://github.com/cervetade/cs2-sudamerica-analytics">cs2-sudamerica-analytics</a> — datos propios extraídos de la API de FACEIT, procesados con Python + SQLite + SQL. Ver el <a href="./README.md">README</a> para la historia completa y el <a href="./sql/">SQL</a> de cada hallazgo.
+  </footer>
+
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const DATA = {"dominancia_por_pais": [{"country": "BR", "n": 628, "pct": 70.0}, {"country": "AR", "n": 194, "pct": 21.6}, {"country": "CL", "n": 47, "pct": 5.2}, {"country": "UY", "n": 18, "pct": 2.0}, {"country": "PY", "n": 5, "pct": 0.6}, {"country": "VE", "n": 2, "pct": 0.2}, {"country": "PE", "n": 2, "pct": 0.2}, {"country": "BO", "n": 1, "pct": 0.1}], "mapas": [{"map": "cache", "partidas": 152, "rondas_promedio": 22.6, "diferencia_rondas": 4.99, "clasificacion": "Parejo"}, {"map": "anubis", "partidas": 157, "rondas_promedio": 21.8, "diferencia_rondas": 5.11, "clasificacion": "Normal"}, {"map": "dust2", "partidas": 609, "rondas_promedio": 22.0, "diferencia_rondas": 5.17, "clasificacion": "Normal"}, {"map": "nuke", "partidas": 152, "rondas_promedio": 21.8, "diferencia_rondas": 5.22, "clasificacion": "Normal"}, {"map": "mirage", "partidas": 980, "rondas_promedio": 21.7, "diferencia_rondas": 5.23, "clasificacion": "Normal"}, {"map": "ancient", "partidas": 295, "rondas_promedio": 21.0, "diferencia_rondas": 5.45, "clasificacion": "Normal"}, {"map": "inferno", "partidas": 75, "rondas_promedio": 21.2, "diferencia_rondas": 5.52, "clasificacion": "Normal"}], "hs_vs_winrate": [{"rango": "< 30%", "winrate": 49.0}, {"rango": "30-45%", "winrate": 51.2}, {"rango": "45-60%", "winrate": 51.8}, {"rango": "60%+", "winrate": 48.0}], "kd_vs_winrate": [{"rango": "2.0+", "winrate": 50.0}, {"rango": "< 0.8", "winrate": 22.3}, {"rango": "0.8-1.0", "winrate": 40.6}, {"rango": "1.0-1.3", "winrate": 57.7}, {"rango": "1.3+", "winrate": 84.9}], "jugadores_revelacion": [{"nickname": "lukaazera", "country": "AR", "elo": 2500, "mapas_jugados": 5, "kd_real": 1.5, "winrate_real": 80.0, "percentil_elo": 11.0, "percentil_kd": 96.0, "diferencia": 84.0}, {"nickname": "spARK_--", "country": "BR", "elo": 2444, "mapas_jugados": 8, "kd_real": 1.15, "winrate_real": 75.0, "percentil_elo": 1.0, "percentil_kd": 71.0, "diferencia": 70.0}, {"nickname": "shrr", "country": "BR", "elo": 2456, "mapas_jugados": 31, "kd_real": 1.15, "winrate_real": 61.3, "percentil_elo": 3.0, "percentil_kd": 71.0, "diferencia": 68.0}, {"nickname": "hass1m", "country": "BR", "elo": 2511, "mapas_jugados": 7, "kd_real": 1.24, "winrate_real": 71.4, "percentil_elo": 14.0, "percentil_kd": 81.0, "diferencia": 66.0}, {"nickname": "coldzera", "country": "BR", "elo": 2610, "mapas_jugados": 7, "kd_real": 1.95, "winrate_real": 57.1, "percentil_elo": 36.0, "percentil_kd": 100.0, "diferencia": 64.0}, {"nickname": "HOMERSIMPLES", "country": "BR", "elo": 2603, "mapas_jugados": 8, "kd_real": 1.47, "winrate_real": 75.0, "percentil_elo": 34.0, "percentil_kd": 95.0, "diferencia": 61.0}, {"nickname": "v7b", "country": "BR", "elo": 2449, "mapas_jugados": 7, "kd_real": 1.09, "winrate_real": 42.9, "percentil_elo": 2.0, "percentil_kd": 60.0, "diferencia": 58.0}, {"nickname": "mathit", "country": "CL", "elo": 2443, "mapas_jugados": 8, "kd_real": 1.08, "winrate_real": 75.0, "percentil_elo": 1.0, "percentil_kd": 58.0, "diferencia": 57.0}, {"nickname": "__hanzo", "country": "PY", "elo": 2479, "mapas_jugados": 6, "kd_real": 1.11, "winrate_real": 83.3, "percentil_elo": 7.0, "percentil_kd": 64.0, "diferencia": 57.0}, {"nickname": "preeh", "country": "BR", "elo": 2600, "mapas_jugados": 5, "kd_real": 1.36, "winrate_real": 100.0, "percentil_elo": 34.0, "percentil_kd": 90.0, "diferencia": 57.0}], "rachas": [{"nickname": "VINI", "racha": "Ganando", "largo": 13}, {"nickname": "decenty", "racha": "Ganando", "largo": 12}, {"nickname": "saadzin_", "racha": "Ganando", "largo": 11}, {"nickname": "gtw", "racha": "Ganando", "largo": 10}, {"nickname": "nicks-", "racha": "Ganando", "largo": 9}, {"nickname": "KZN1", "racha": "Ganando", "largo": 8}, {"nickname": "spider--", "racha": "Ganando", "largo": 7}, {"nickname": "keiz-_-", "racha": "Ganando", "largo": 7}, {"nickname": "y4s", "racha": "Ganando", "largo": 6}, {"nickname": "deemO-", "racha": "Ganando", "largo": 6}], "desgaste": [{"bucket": "<= 30 min", "kd": 1.19, "hs": 55.7, "n": 5371}, {"bucket": "30-45 min", "kd": 1.04, "hs": 54.0, "n": 15420}, {"bucket": "45-60 min", "kd": 1.02, "hs": 52.3, "n": 2820}, {"bucket": "60+ min", "kd": 1.01, "hs": 49.2, "n": 690}], "resumen": {"total_jugadores": 1000, "jugadores_sa": 897, "total_partidas": 2402, "total_mapas": 2430, "filas_stats": 24301}};
+
+const tooltip = document.getElementById("tooltip");
+function showTooltip(evt, html) {
+  tooltip.innerHTML = html;
+  tooltip.classList.add("show");
+  moveTooltip(evt);
+}
+function moveTooltip(evt) {
+  const wrap = evt.currentTarget.closest(".chart-wrap");
+  const rect = wrap.getBoundingClientRect();
+  tooltip.style.left = (evt.clientX - rect.left + wrap.offsetLeft + wrap.getBoundingClientRect().left - rect.left) + "px";
+  // position relative to viewport using fixed-like math via wrap container
+  const x = evt.clientX - rect.left;
+  const y = evt.clientY - rect.top;
+  tooltip.style.left = (wrap.offsetLeft + x) + "px";
+  tooltip.style.top = (wrap.offsetTop + y - 10) + "px";
+}
+function hideTooltip() {
+  tooltip.classList.remove("show");
+}
+
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+/**
+ * Generic vertical bar chart with direct labels + hover tooltip.
+ * items: [{label, value, color, tip}]
+ */
+function verticalBars(containerId, items, opts) {
+  opts = opts || {};
+  const container = document.getElementById(containerId);
+  const width = container.clientWidth || 480;
+  const height = opts.height || 260;
+  const padTop = 16, padBottom = 34, padSide = 10;
+  const maxVal = opts.max || Math.max(...items.map(d => d.value)) * 1.2;
+  const n = items.length;
+  const gap = 0.38;
+  const bw = (width - padSide * 2) / n;
+
+  const svg = el("svg", { width: "100%", height: height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.ariaLabel || "" });
+
+  if (opts.refLine !== undefined) {
+    const y = height - padBottom - (opts.refLine / maxVal) * (height - padTop - padBottom);
+    svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: y, y2: y, class: "ref-line" }));
+  }
+
+  items.forEach((d, i) => {
+    const x = padSide + i * bw + bw * gap / 2;
+    const barW = bw * (1 - gap);
+    const barH = Math.max(2, (d.value / maxVal) * (height - padTop - padBottom));
+    const y = height - padBottom - barH;
+
+    const rect = el("rect", { x, y, width: barW, height: barH, rx: 3, fill: d.color || "var(--blue)", class: "bar" });
+    rect.addEventListener("mouseenter", (e) => showTooltip(e, d.tip || `<b>${d.label}</b>: ${d.value}`));
+    rect.addEventListener("mousemove", moveTooltip);
+    rect.addEventListener("mouseleave", hideTooltip);
+    svg.appendChild(rect);
+
+    const vlabel = el("text", { x: x + barW / 2, y: y - 6, "text-anchor": "middle", class: "value-label", "font-size": "12" });
+    vlabel.textContent = d.valueLabel !== undefined ? d.valueLabel : d.value;
+    svg.appendChild(vlabel);
+
+    const llabel = el("text", { x: x + barW / 2, y: height - padBottom + 16, "text-anchor": "middle", class: "axis-label" });
+    llabel.textContent = d.label;
+    svg.appendChild(llabel);
+  });
+
+  svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: height - padBottom, y2: height - padBottom, class: "baseline" }));
+  container.innerHTML = "";
+  container.appendChild(svg);
+}
+
+/**
+ * Generic horizontal bar chart, sorted top to bottom as given.
+ */
+function horizontalBars(containerId, items, opts) {
+  opts = opts || {};
+  const container = document.getElementById(containerId);
+  const width = container.clientWidth || 480;
+  const rowH = opts.rowH || 30;
+  const padLeft = opts.padLeft || 92;
+  const padRight = 56;
+  const height = items.length * rowH + 10;
+  const maxVal = opts.max || Math.max(...items.map(d => d.value)) * 1.12;
+
+  const svg = el("svg", { width: "100%", height: height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.ariaLabel || "" });
+
+  items.forEach((d, i) => {
+    const y = i * rowH + 6;
+    const barH = rowH - 12;
+    const barW = Math.max(2, (d.value / maxVal) * (width - padLeft - padRight));
+
+    const label = el("text", { x: padLeft - 8, y: y + barH / 2 + 4, "text-anchor": "end", "font-size": "12" });
+    label.textContent = d.label;
+    svg.appendChild(label);
+
+    const rect = el("rect", { x: padLeft, y, width: barW, height: barH, rx: 3, fill: d.color || "var(--blue)", class: "bar" });
+    rect.addEventListener("mouseenter", (e) => showTooltip(e, d.tip || `<b>${d.label}</b>: ${d.value}`));
+    rect.addEventListener("mousemove", moveTooltip);
+    rect.addEventListener("mouseleave", hideTooltip);
+    svg.appendChild(rect);
+
+    const vlabel = el("text", { x: padLeft + barW + 8, y: y + barH / 2 + 4, class: "value-label", "font-size": "12" });
+    vlabel.textContent = d.valueLabel !== undefined ? d.valueLabel : d.value;
+    svg.appendChild(vlabel);
+  });
+
+  container.innerHTML = "";
+  container.appendChild(svg);
+}
+
+// --- Stat tiles ---
+(function () {
+  const r = DATA.resumen;
+  const tiles = [
+    { num: r.jugadores_sa.toLocaleString("es-AR"), label: "Jugadores SA en el top 1000" },
+    { num: r.total_partidas.toLocaleString("es-AR"), label: "Partidas analizadas" },
+    { num: r.total_mapas.toLocaleString("es-AR"), label: "Mapas jugados" },
+    { num: r.filas_stats.toLocaleString("es-AR"), label: "Filas de stats jugador/mapa" },
+  ];
+  const box = document.getElementById("stat-tiles");
+  tiles.forEach(t => {
+    const div = document.createElement("div");
+    div.className = "stat-tile";
+    div.innerHTML = `<div class="num">${t.num}</div><div class="label">${t.label}</div>`;
+    box.appendChild(div);
+  });
+})();
+
+// --- 1. Dominancia por pais ---
+verticalBars("chart-paises", DATA.dominancia_por_pais.map(d => ({
+  label: d.country, value: d.n, valueLabel: `${d.n}`, color: "var(--blue)",
+  tip: `<b>${d.country}</b>: ${d.n} jugadores (${d.pct}%)`
+})), { ariaLabel: "Jugadores por país" });
+
+// --- 2. HS% vs winrate (secuencial, 4 pasos) ---
+const seqColors = ["var(--seq-1)", "var(--seq-2)", "var(--seq-3)", "var(--seq-4)"];
+verticalBars("chart-hs", DATA.hs_vs_winrate.map((d, i) => ({
+  label: d.rango, value: d.winrate, valueLabel: `${d.winrate}%`, color: seqColors[i],
+  tip: `<b>HS% ${d.rango}</b>: ${d.winrate}% win rate`
+})), { max: 58, refLine: 50, refLineLabel: "50% (azar)", ariaLabel: "Win rate por rango de headshot %" });
+
+// --- 2b. K/D vs winrate (secuencial, 5 pasos) ---
+const seq5Colors = ["var(--seq5-1)", "var(--seq5-2)", "var(--seq5-3)", "var(--seq5-4)", "var(--seq5-5)"];
+const kdOrder = ["< 0.8", "0.8-1.0", "1.0-1.3", "1.3+", "2.0+"];
+const kdSorted = kdOrder.map(r => DATA.kd_vs_winrate.find(d => d.rango === r)).filter(Boolean);
+verticalBars("chart-kd", kdSorted.map((d, i) => ({
+  label: d.rango, value: d.winrate, valueLabel: `${d.winrate}%`, color: seq5Colors[i],
+  tip: `<b>K/D ${d.rango}</b>: ${d.winrate}% win rate`
+})), { max: 95, refLine: 50, refLineLabel: "50% (azar)", ariaLabel: "Win rate por rango de K/D" });
+
+// --- 3. Desgaste ---
+verticalBars("chart-desgaste-kd", DATA.desgaste.map(d => ({
+  label: d.bucket, value: d.kd, valueLabel: d.kd, color: "var(--blue)",
+  tip: `<b>${d.bucket}</b>: K/D promedio ${d.kd} (n=${d.n.toLocaleString("es-AR")})`
+})), { ariaLabel: "K/D promedio por duración de partida" });
+verticalBars("chart-desgaste-hs", DATA.desgaste.map(d => ({
+  label: d.bucket, value: d.hs, valueLabel: `${d.hs}%`, color: "var(--orange)",
+  tip: `<b>${d.bucket}</b>: HS% promedio ${d.hs}% (n=${d.n.toLocaleString("es-AR")})`
+})), { ariaLabel: "Headshot % promedio por duración de partida" });
+
+// --- 4. Mapas ---
+const mapasSorted = [...DATA.mapas].sort((a, b) => a.diferencia_rondas - b.diferencia_rondas);
+horizontalBars("chart-mapas", mapasSorted.map((d, i) => ({
+  label: `de_${d.map}` + (i === 0 ? "  ★" : ""), value: d.diferencia_rondas, valueLabel: d.diferencia_rondas,
+  color: "var(--blue)",
+  tip: `<b>de_${d.map}</b>: diferencia de ${d.diferencia_rondas} rondas en promedio (${d.partidas} partidas, ${d.clasificacion})`
+})), { max: Math.max(...mapasSorted.map(d => d.diferencia_rondas)) * 1.15, ariaLabel: "Diferencia de rondas por mapa" });
+
+// --- 5. Rachas ---
+horizontalBars("chart-rachas", DATA.rachas.map(d => ({
+  label: d.nickname, value: d.largo, valueLabel: `${d.largo}`, color: "var(--blue)",
+  tip: `<b>${d.nickname}</b>: racha de ${d.largo} partidas ganadas seguidas`
+})), { ariaLabel: "Racha ganadora activa por jugador" });
+
+// --- 6. Tabla jugadores revelacion (sortable) ---
+(function () {
+  const cols = [
+    { key: "nickname", label: "Nick" },
+    { key: "country", label: "País" },
+    { key: "elo", label: "ELO", num: true },
+    { key: "mapas_jugados", label: "Mapas", num: true },
+    { key: "kd_real", label: "K/D real", num: true },
+    { key: "winrate_real", label: "Win %", num: true, fmt: v => v + "%" },
+    { key: "diferencia", label: "Sobre lo esperado", num: true, fmt: v => (v > 0 ? "+" : "") + v + " pts" },
+  ];
+  let rows = [...DATA.jugadores_revelacion];
+  let sortKey = "diferencia", sortDir = -1;
+
+  function render() {
+    rows.sort((a, b) => (a[sortKey] - b[sortKey]) * sortDir || 0);
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const trh = document.createElement("tr");
+    cols.forEach(c => {
+      const th = document.createElement("th");
+      th.textContent = c.label;
+      if (c.num) th.classList.add("num");
+      if (c.key === sortKey) th.classList.add("sorted");
+      th.addEventListener("click", () => {
+        if (sortKey === c.key) sortDir *= -1; else { sortKey = c.key; sortDir = -1; }
+        render();
+      });
+      trh.appendChild(th);
+    });
+    thead.appendChild(trh);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    rows.forEach(r => {
+      const tr = document.createElement("tr");
+      cols.forEach(c => {
+        const td = document.createElement("td");
+        if (c.num) td.classList.add("num");
+        let v = r[c.key];
+        if (c.key === "nickname") { tr.style.fontWeight = "600"; }
+        td.textContent = c.fmt ? c.fmt(v) : v;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+
+    const box = document.getElementById("table-revelacion");
+    box.innerHTML = "";
+    box.appendChild(table);
+  }
+  render();
+})();
+
+window.addEventListener("resize", () => {
+  // simple debounce-free re-render on resize for responsiveness
+  clearTimeout(window.__rz);
+  window.__rz = setTimeout(() => location.reload(), 300);
+});
+</script>
+</body>
+</html>

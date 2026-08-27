@@ -99,7 +99,16 @@ python build_dashboard.py
 sqlite3 data/processed/cs2_sa.db < sql/01_dominancia_por_pais.sql
 ```
 
-`dashboard.html` es autocontenido (HTML + CSS + JS + datos en un solo archivo, sin dependencias externas) — se puede abrir directo en el navegador o servir con GitHub Pages.
+`dashboard.html` (e `index.html`, copia idéntica) es autocontenido — HTML + CSS + JS + datos en un solo archivo, sin dependencias externas.
+
+### Desplegarlo en vivo (Vercel)
+
+1. Entrá a [vercel.com](https://vercel.com) y logueate con GitHub.
+2. "Add New..." → "Project" → elegí `cs2-sudamerica-analytics`.
+3. Framework preset: **Other** (es HTML estático, no necesita build command).
+4. "Deploy". Vercel sirve `index.html` en la raíz del dominio que te da (`cs2-sudamerica-analytics.vercel.app` o el que elijas).
+
+Cada vez que actualices el dashboard (`python build_dashboard.py`) y hagas push a `main`, Vercel lo redespliega solo.
 
 ## Stack
 

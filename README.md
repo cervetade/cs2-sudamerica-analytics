@@ -36,6 +36,18 @@ El jugador con la racha activa más larga del top de la región lleva 13 partida
 
 Entre los mapas con muestra suficiente (20+ partidas), `de_cache` tiene la menor diferencia de rondas promedio (4.99), es decir, las partidas ahí terminan más ajustadas que en el resto del pool competitivo.
 
+### 7. El mapa "propio" de cada país no es el que se supone
+
+En vez de comparar win rate cruda entre países (cada uno arranca de un nivel promedio distinto), se midió cuánto se desvía cada país de *su propio* promedio en cada mapa. La intuición decía Argentina-`de_nuke`, pero los datos dicen otra cosa: **Chile domina `de_nuke`** muy por encima de su costumbre (61.5% de win rate ahí vs. 54% de base). El mapa fuerte de Argentina es `de_cache` (+5.5 puntos sobre su propio promedio); el débil, `de_anubis` (-6.2). Brasil es el más parejo de los tres — nunca se desvía más de ~3 puntos en ningún mapa. Setup en [`sql/07_dominancia_por_mapa_y_pais.sql`](./sql/07_dominancia_por_mapa_y_pais.sql).
+
+### 8. Brasil no solo tiene más jugadores — también el ELO promedio más alto
+
+628 jugadores con ELO promedio 2689. Argentina, con casi un tercio de esa cantidad (194), promedia 2661 — bastante cerca. Acá cantidad y calidad van en la misma dirección, no es solo volumen. Ver [`sql/08_elo_promedio_por_pais.sql`](./sql/08_elo_promedio_por_pais.sql).
+
+### 9. Sudamérica juega de noche, fuerte
+
+Agrupando las partidas por franja horaria (aprox. UTC-3): el 45.5% se juega entre las 18h y las 23h, y sumando la madrugada (0-5h, 27%) el bloque noche + trasnoche se lleva más del 70% del total. Entre las 6 y las 11 de la mañana el volumen se cae a un 1.7% — casi nadie juega competitivo a esa hora. Ver [`sql/09_hora_pico_de_juego.sql`](./sql/09_hora_pico_de_juego.sql).
+
 ## Cómo se armó
 
 Los datos se extrajeron con [`fetch_faceit_data.py`](./fetch_faceit_data.py) contra la [Data API v4 de FACEIT](https://docs.faceit.com/docs/data-api/), con una API key propia gratuita del [Developer Portal](https://developers.faceit.com/). El pipeline:

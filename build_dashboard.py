@@ -132,6 +132,55 @@ def build_data(cur):
         "filas_stats": cur.execute("SELECT COUNT(*) FROM match_player_stats").fetchone()[0],
     }
 
+    data["mapa_pais"] = [
+        {"pais": r[0], "mapa": r[1].replace("de_", ""), "filas": r[2], "winrate_mapa": r[3],
+         "winrate_base": r[4], "diferencia": r[5]}
+        for r in cur.execute("""
+            WITH baseline_pais AS (
+                SELECT p.country, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_base, COUNT(*) AS filas_base
+                FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
+                WHERE p.country IN ('br','ar','cl') GROUP BY p.country
+            ),
+            por_mapa AS (
+                SELECT p.country, mps.map, COUNT(*) AS filas, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_mapa
+                FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
+                WHERE p.country IN ('br','ar','cl') GROUP BY p.country, mps.map HAVING COUNT(*) >= 30
+            )
+            SELECT UPPER(pm.country), pm.map, pm.filas, pm.winrate_mapa, b.winrate_base,
+                ROUND(pm.winrate_mapa - b.winrate_base, 1)
+            FROM por_mapa pm JOIN baseline_pais b ON pm.country = b.country
+            ORDER BY pm.country, 6 DESC
+        """).fetchall()
+    ]
+
+    data["elo_por_pais"] = [
+        {"pais": r[0], "jugadores": r[1], "elo_promedio": r[2],
+         "kd_promedio_historico": r[3], "winrate_promedio_historico": r[4]}
+        for r in cur.execute("""
+            SELECT UPPER(country), COUNT(*), ROUND(AVG(faceit_elo),0),
+                ROUND(AVG(lifetime_kd_ratio),2), ROUND(AVG(lifetime_win_rate_percent),1)
+            FROM players WHERE is_sa_country=1
+            GROUP BY country HAVING COUNT(*)>=10 ORDER BY 3 DESC
+        """).fetchall()
+    ]
+
+    data["hora_pico"] = [
+        {"franja": r[0], "partidas": r[1], "pct": r[2]}
+        for r in cur.execute("""
+            SELECT
+                CASE WHEN hora BETWEEN 6 AND 11 THEN 'Mañana (6-11h)'
+                     WHEN hora BETWEEN 12 AND 17 THEN 'Tarde (12-17h)'
+                     WHEN hora BETWEEN 18 AND 23 THEN 'Noche (18-23h)'
+                     ELSE 'Madrugada (0-5h)' END AS franja,
+                COUNT(*), ROUND(100.0*COUNT(*)/(SELECT COUNT(*) FROM matches),1)
+            FROM (
+                SELECT CAST(strftime('%H', datetime(finished_at - 3*3600, 'unixepoch')) AS INTEGER) AS hora
+                FROM matches WHERE finished_at IS NOT NULL
+            )
+            GROUP BY franja ORDER BY 2 DESC
+        """).fetchall()
+    ]
+
     return data
 
 
@@ -188,6 +237,10 @@ TEMPLATE = r"""<!doctype html>
     --m-de_nuke: #3aa0c9;     /* celeste industrial */
     --m-de_anubis: #c9962c;   /* dorado/bronce egipcio */
     --m-de_ancient: #6b8f5a;  /* verde musgo de templo */
+
+    /* diverging: mejor / peor que el propio promedio */
+    --diverge-pos: #0ca30c;
+    --diverge-neg: #d1453b;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -231,6 +284,9 @@ TEMPLATE = r"""<!doctype html>
       --m-de_nuke: #5bc0de;
       --m-de_anubis: #e0b355;
       --m-de_ancient: #8bb377;
+
+      --diverge-pos: #1ec01e;
+      --diverge-neg: #e2645a;
     }
   }
 
@@ -347,6 +403,10 @@ TEMPLATE = r"""<!doctype html>
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
   @media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
 
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 820px) { .grid-3 { grid-template-columns: 1fr; } }
+  .grid-3 h3 { font-size: 12px; font-weight: 700; color: var(--ink-secondary); margin: 0 0 8px; text-align: center; }
+
   .chart-wrap { position: relative; }
   svg text { fill: var(--ink-secondary); font-family: inherit; }
   svg .value-label { fill: var(--ink-primary); font-weight: 600; }
@@ -429,6 +489,18 @@ TEMPLATE = r"""<!doctype html>
       <a class="nav-item" data-target="s-revelacion" href="#s-revelacion">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2l1.7 3.6 4 .5-3 2.8.8 4-3.5-1.9-3.5 1.9.8-4-3-2.8 4-.5L8 2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
         Jugadores revelación
+      </a>
+      <a class="nav-item" data-target="s-mapapais" href="#s-mapapais">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4l4-1.4 4 1.4 4-1.4v9.8l-4 1.4-4-1.4-4 1.4V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6 2.6v9.8M10 4v9.8" stroke="currentColor" stroke-width="1.3"/></svg>
+        Mapa por país
+      </a>
+      <a class="nav-item" data-target="s-elo" href="#s-elo">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 1.6L3 4v4.4c0 3 2.1 5.4 5 6 2.9-.6 5-3 5-6V4L8 1.6z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        ELO por país
+      </a>
+      <a class="nav-item" data-target="s-hora" href="#s-hora">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.3l2.3 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        Hora pico de juego
       </a>
     </nav>
 
@@ -518,6 +590,31 @@ TEMPLATE = r"""<!doctype html>
         <p class="sub">ELO relativamente bajo para su nivel, pero rendimiento real muy por encima de lo esperado — clic en una columna para ordenar</p>
         <div id="table-revelacion"></div>
         <p class="finding">Apareció <strong>coldzera</strong> — el histórico jugador profesional brasileño — con un K/D real de 1.95, el más alto de todos los sudamericanos con muestra suficiente para el análisis.</p>
+      </section>
+
+      <section class="panel" id="s-mapapais">
+        <div class="panel-head"><h2>El mapa "propio" de cada país</h2><span class="tag">07</span></div>
+        <p class="sub">Cuánto se desvía cada país de su propio promedio en cada mapa (no win rate cruda — cada país arranca de un nivel distinto). Verde = mejor que su costumbre, rojo = peor.</p>
+        <div class="grid-3">
+          <div><h3>Argentina</h3><div class="chart-wrap" id="chart-mapapais-ar"></div></div>
+          <div><h3>Brasil</h3><div class="chart-wrap" id="chart-mapapais-br"></div></div>
+          <div><h3>Chile</h3><div class="chart-wrap" id="chart-mapapais-cl"></div></div>
+        </div>
+        <p class="finding">La intuición decía Argentina-nuke, pero los números dicen otra cosa: <strong>Chile domina de_nuke</strong> muy por encima de su propio promedio (61.5% vs. 54% base). El mapa fuerte de Argentina es de_cache; el débil, de_anubis. Brasil es el más parejo de los tres — nunca se desvía más de ~3 puntos en ningún mapa.</p>
+      </section>
+
+      <section class="panel" id="s-elo">
+        <div class="panel-head"><h2>ELO promedio por país</h2><span class="tag">08</span></div>
+        <p class="sub">¿Brasil domina solo en cantidad de jugadores, o también en nivel? (países con menos de 10 jugadores en la muestra, excluidos)</p>
+        <div class="chart-wrap" id="chart-elo"></div>
+        <p class="finding">Brasil no solo tiene 3x más jugadores que Argentina en el top 1000 — también tiene el ELO promedio más alto (2689 vs. 2661). La diferencia es chica, pero va en la misma dirección: acá cantidad y calidad van juntas.</p>
+      </section>
+
+      <section class="panel" id="s-hora">
+        <div class="panel-head"><h2>¿A qué hora se juega más CS2 en Sudamérica?</h2><span class="tag">09</span></div>
+        <p class="sub">Partidas por franja horaria, aproximado a UTC-3 (horario más común de la región)</p>
+        <div class="chart-wrap" id="chart-hora"></div>
+        <p class="finding">Casi la mitad de las partidas (45.5%) se juegan entre las 18h y las 23h. Sumando la madrugada, el bloque noche + trasnoche se lleva más del 70% del total — entre las 6 y las 11 de la mañana el volumen cae a un 1.7%.</p>
       </section>
 
     </div>
@@ -755,6 +852,38 @@ horizontalBars("chart-rachas", DATA.rachas.map(d => ({
     box.innerHTML = ""; box.appendChild(table);
   }
   render();
+})();
+
+/* --- 07: mapa "propio" de cada país (diverging vs. el propio promedio) --- */
+(function () {
+  const byCountry = { AR: [], BR: [], CL: [] };
+  DATA.mapa_pais.forEach(d => { if (byCountry[d.pais]) byCountry[d.pais].push(d); });
+  Object.keys(byCountry).forEach(pais => {
+    const rows = [...byCountry[pais]].sort((a, b) => b.diferencia - a.diferencia);
+    horizontalBars(`chart-mapapais-${pais.toLowerCase()}`, rows.map(d => ({
+      label: `de_${d.mapa}`,
+      value: Math.abs(d.diferencia),
+      valueLabel: (d.diferencia > 0 ? "+" : "") + d.diferencia,
+      color: d.diferencia >= 0 ? "var(--diverge-pos)" : "var(--diverge-neg)",
+      tip: `<b>de_${d.mapa}</b>: ${d.winrate_mapa}% win rate (promedio de ${pais}: ${d.winrate_base}%) — ${d.filas} filas`
+    })), { rowH: 26, padLeft: 84, max: 8, ariaLabel: `Desviación por mapa, ${pais}` });
+  });
+})();
+
+/* --- 08: ELO promedio por país --- */
+verticalBars("chart-elo", DATA.elo_por_pais.map(d => ({
+  label: d.pais, value: d.elo_promedio, valueLabel: Math.round(d.elo_promedio), color: countryColors[d.pais] || "var(--blue)",
+  tip: `<b>${d.pais}</b>: ELO promedio ${Math.round(d.elo_promedio)} · K/D histórico ${d.kd_promedio_historico} · ${d.jugadores} jugadores`
+})), { max: Math.max(...DATA.elo_por_pais.map(d => d.elo_promedio)) * 1.05, ariaLabel: "ELO promedio por país" });
+
+/* --- 09: hora pico de juego --- */
+(function () {
+  const order = ["Madrugada (0-5h)", "Mañana (6-11h)", "Tarde (12-17h)", "Noche (18-23h)"];
+  const rows = order.map(f => DATA.hora_pico.find(d => d.franja === f)).filter(Boolean);
+  verticalBars("chart-hora", rows.map(d => ({
+    label: d.franja.replace(/\s*\(.*\)/, ""), value: d.pct, valueLabel: `${d.pct}%`, color: "var(--blue)",
+    tip: `<b>${d.franja}</b>: ${d.partidas.toLocaleString("es-AR")} partidas (${d.pct}%)`
+  })), { ariaLabel: "Partidas por franja horaria" });
 })();
 
 window.addEventListener("resize", () => { clearTimeout(window.__rz); window.__rz = setTimeout(() => location.reload(), 300); });

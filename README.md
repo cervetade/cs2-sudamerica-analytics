@@ -59,11 +59,15 @@ Agrupando las partidas por franja horaria (aprox. UTC-3): el 45.0% se juega entr
 Los datos se extrajeron con [`fetch_faceit_data.py`](./fetch_faceit_data.py) contra la [Data API v4 de FACEIT](https://docs.faceit.com/docs/data-api/), con una API key propia gratuita del [Developer Portal](https://developers.faceit.com/). El pipeline:
 
 1. Baja el ranking completo (top 1000) de la región **SA** de CS2, paginado.
-2. Para esos 1000, suma sus stats de por vida (partidas, win rate, K/D, HS%).
+2. Para esos 1000, suma sus stats de por vida (partidas, win rate, K/D, HS%) y cuándo se creó su cuenta de FACEIT (`activated_at`).
 3. Para el top 300 (los de mayor nivel), baja el historial de sus últimas 30 partidas.
 4. Para cada partida única de ese grupo, baja el detalle por jugador/mapa y la duración real de la partida.
 
 La API key nunca se hardcodea — se lee de la variable de entorno `FACEIT_API_KEY`.
+
+### Aclaración sobre "antigüedad de cuenta"
+
+La Data API v4 de FACEIT no expone la edad de los jugadores en ningún endpoint (se investigó explícitamente). Lo más cercano que existe es `activated_at` — cuándo se creó la cuenta de FACEIT, no la edad de la persona ni de cuánto juega CS2 en general. Se usa como proxy de antigüedad en la plataforma en [`sql/11_veteranos_vs_cuentas_nuevas.sql`](./sql/11_veteranos_vs_cuentas_nuevas.sql), con esa distinción siempre aclarada.
 
 ### Aclaración sobre "Sudamérica"
 
@@ -84,6 +88,7 @@ Diagrama entidad-relación de las 5 tablas y cómo se conectan: [`docs/ERD.md`](
 cs2-sudamerica-analytics/
 ├── fetch_faceit_data.py       # extractor: FACEIT API -> CSVs crudos
 ├── build_database.py          # limpieza + carga a SQLite
+├── fetch_season_history.py    # backfill de una temporada ya cerrada (ver abajo)
 ├── make_charts.py             # genera los gráficos de este README
 ├── dashboard.html             # dashboard interactivo (ver online o abrir local)
 ├── docs/
@@ -94,7 +99,8 @@ cs2-sudamerica-analytics/
 ├── sql/                       # una query por hallazgo, comentada
 ├── charts/                    # gráficos del README
 └── .github/workflows/
-    └── refresh.yml             # actualización automática semanal (ver abajo)
+    ├── refresh.yml             # actualización automática semanal (ver abajo)
+    └── season-backfill.yml     # backfill manual de una temporada cerrada (ver abajo)
 ```
 
 ## Cómo correrlo
@@ -139,6 +145,22 @@ El proyecto corre su propio pipeline una vez por semana sin intervención manual
 3. Ese push dispara el redeploy automático de Vercel — el dashboard queda al día sin que nadie tenga que tocar nada.
 
 Para activarlo en tu propio fork: `Settings → Secrets and variables → Actions → New repository secret`, nombre `FACEIT_API_KEY`, valor tu API key. El workflow ya está armado para leerla desde ahí — nunca queda expuesta en el código ni en los logs. También podés dispararlo a mano desde la pestaña "Actions" ("Run workflow") si no querés esperar al domingo.
+
+### Analizar una temporada ya cerrada
+
+`fetch_faceit_data.py` baja "las últimas N partidas" de cada jugador — perfecto para una temporada en curso, pero inútil para una que ya terminó (si un jugador jugó mucho desde entonces, sus últimas partidas ya no llegan hasta esa temporada vieja). Para eso existe [`fetch_season_history.py`](./fetch_season_history.py): usa los parámetros `from`/`to` del endpoint de historial de FACEIT para traer **todas** las partidas de un jugador dentro de una ventana de fechas fija, sin importar cuánto jugó después.
+
+```bash
+export FACEIT_API_KEY="tu-key-aca"
+python fetch_season_history.py --season 8 --from 2026-04-22 --to 2026-08-04
+python build_database.py
+```
+
+Guarda todo en los mismos CSVs de `data/raw/` — no hace falta tocar `build_database.py`, ni crear tablas nuevas: las partidas de temporadas distintas ya se distinguen solas por `finished_at`. Es resumible (si se corta, correlo de nuevo con los mismos parámetros y salta todo lo que ya bajó) y tiene un tope de 150 partidas por jugador dentro de la ventana (`MAX_MATCHES_PER_PLAYER`, ajustable) para no arriesgar corridas de muchísimas horas.
+
+Para no tener que dejarlo corriendo en tu compu, hay un workflow manual — [`.github/workflows/season-backfill.yml`](./.github/workflows/season-backfill.yml) — que lo corre en GitHub Actions: pestaña "Actions" → "Backfill de temporada cerrada" → "Run workflow", completás temporada/fecha inicio/fecha fin, y listo (reusa el mismo secreto `FACEIT_API_KEY`). A diferencia del refresh semanal, este nunca se dispara solo — una temporada cerrada no cambia más, así que no tiene sentido correrlo seguido.
+
+Con los datos de una temporada cerrada ya en la base, [`sql/10_comparacion_temporadas.sql`](./sql/10_comparacion_temporadas.sql) arranca la comparación entre temporadas (el ranking/ELO no es comparable así, porque `players` es una sola foto del estado actual — ver el comentario en ese archivo).
 
 ## Stack
 

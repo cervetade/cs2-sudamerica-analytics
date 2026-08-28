@@ -63,7 +63,12 @@ if TEST_MODE:
     MATCHES_PER_PLAYER = 10
 else:
     TOP_N_TOTAL = 1000     # ranking completo -> tabla grande para comparar paises
-    DEEP_DIVE_N = 150      # subset con detalle de partidas (lo pesado)
+    DEEP_DIVE_N = 300      # subset con detalle de partidas (lo pesado)
+                           # subido de 150 -> 300 para triplicar la muestra de
+                           # jugadores chilenos con detalle real (4 -> 12 en el
+                           # deep dive) y reforzar AR/BR de paso. Corrida mas
+                           # larga (~1.5-2h en el paso 3) pero mismo script,
+                           # mismo checkpointing cada 200 partidas.
     MATCHES_PER_PLAYER = 30
 
 RANKING_PAGE_SIZE = 100  # tamaño de pagina al paginar el ranking (offset)
@@ -144,6 +149,13 @@ def get_player_stats(player_id):
     return api_get(f"/players/{player_id}/stats/{GAME_ID}")
 
 
+def get_player_details(player_id):
+    """Perfil base del jugador -- de aca sacamos activated_at (cuando se creo
+    la cuenta de FACEIT), que no viene en /stats. No es la edad de la
+    persona, es antiguedad de cuenta en la plataforma -- ver README."""
+    return api_get(f"/players/{player_id}")
+
+
 def get_player_history(player_id, limit):
     return api_get(
         f"/players/{player_id}/history",
@@ -215,6 +227,12 @@ def main():
         p["lifetime_win_rate_percent"] = lifetime.get("Win Rate %")
         p["lifetime_kd_ratio"] = lifetime.get("Average K/D Ratio")
         p["lifetime_headshots_percent"] = lifetime.get("Average Headshots %")
+
+        # activated_at = cuando se creo la cuenta de FACEIT (ISO 8601, ej.
+        # "2019-08-24T14:15:22Z") -- antiguedad de cuenta en la plataforma,
+        # NO edad de la persona (la API no expone eso, ver README).
+        details = get_player_details(p["player_id"])
+        p["activated_at"] = (details or {}).get("activated_at")
 
     write_csv("players.csv", players_rows)
 

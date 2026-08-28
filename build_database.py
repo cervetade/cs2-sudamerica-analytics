@@ -89,7 +89,8 @@ def main():
             lifetime_matches INTEGER,
             lifetime_win_rate_percent REAL,
             lifetime_kd_ratio REAL,
-            lifetime_headshots_percent REAL
+            lifetime_headshots_percent REAL,
+            activated_at TEXT
         );
 
         CREATE TABLE matches (
@@ -152,7 +153,7 @@ def main():
     for p in players:
         country = (p["country"] or "").lower()
         cur.execute(
-            """INSERT INTO players VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO players VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 p["player_id"],
                 p["nickname"],
@@ -165,6 +166,10 @@ def main():
                 to_float(p["lifetime_win_rate_percent"]),
                 to_float(p["lifetime_kd_ratio"]),
                 to_float(p["lifetime_headshots_percent"]),
+                # activated_at es columna nueva -- players.csv de corridas
+                # viejas (antes de este cambio) no la va a tener; con .get()
+                # no rompe, solo queda NULL para esas filas.
+                p.get("activated_at") or None,
             ),
         )
 

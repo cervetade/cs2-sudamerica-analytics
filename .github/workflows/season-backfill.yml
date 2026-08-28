@@ -1,0 +1,79 @@
+name: Backfill de temporada cerrada
+
+# Job manual (nunca por cron) para bajar TODA la data de una temporada de
+# FACEIT que ya termino, usando fetch_season_history.py. A diferencia del
+# refresh semanal (refresh.yml), esto no se dispara solo -- una temporada
+# cerrada no cambia mas, asi que no tiene sentido correrlo seguido. Se usa
+# una vez por temporada que se quiera agregar como analisis historico.
+#
+# Es resumible: si se corta por el limite de 6h de GitHub o por cualquier
+# otro motivo, correlo de nuevo con los mismos inputs -- el script salta
+# todo lo que ya esta en data/raw/ y sigue donde quedo.
+#
+# Necesita el mismo secreto FACEIT_API_KEY que refresh.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: "Numero/label de la temporada (solo para el mensaje de commit y los logs)"
+        required: true
+        type: string
+        default: "8"
+      from_date:
+        description: "Inicio de la temporada, YYYY-MM-DD (UTC)"
+        required: true
+        type: string
+        default: "2026-04-22"
+      to_date:
+        description: "Fin de la temporada, YYYY-MM-DD (UTC)"
+        required: true
+        type: string
+        default: "2026-08-04"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-pipeline  # mismo grupo que refresh.yml -- nunca los dos a la vez
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    # Limite duro de GitHub Actions para runners hosteados: 6h. Dejamos
+    # margen. Si no alcanza, el job corta solo y se puede re-disparar --
+    # el script retoma donde quedo (ver nota arriba).
+    timeout-minutes: 330
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Backfill de partidas de la temporada
+        env:
+          FACEIT_API_KEY: ${{ secrets.FACEIT_API_KEY }}
+        run: python fetch_season_history.py --season "${{ inputs.season }}" --from "${{ inputs.from_date }}" --to "${{ inputs.to_date }}"
+
+      - name: Cargar a SQLite
+        run: python build_database.py
+
+      - name: Commitear los datos crudos + la base (SIN regenerar el dashboard)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/raw/matches.csv data/raw/match_maps.csv data/raw/match_player_stats.csv data/raw/match_history.csv data/processed/cs2_sa.db
+          if git diff --cached --quiet; then
+            echo "Sin cambios -- no hay nada que commitear."
+          else
+            git commit -m "Backfill Temporada ${{ inputs.season }} (${{ inputs.from_date }} a ${{ inputs.to_date }})"
+            git push
+          fi

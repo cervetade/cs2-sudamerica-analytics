@@ -588,9 +588,9 @@ TEMPLATE = r"""<!doctype html>
   }
 
   .tooltip {
-    position: absolute; pointer-events: none; background: var(--ink-primary); color: var(--surface);
+    position: fixed; pointer-events: none; background: var(--ink-primary); color: var(--surface);
     font-size: 11.5px; padding: 6px 10px; border-radius: 6px; white-space: nowrap;
-    transform: translate(-50%, -100%); opacity: 0; transition: opacity 0.1s; z-index: 10;
+    transform: translate(-50%, -100%); opacity: 0; transition: opacity 0.1s; z-index: 40;
     top: 0; left: 0;
   }
   .tooltip.show { opacity: 0.97; }
@@ -1003,11 +1003,17 @@ setActiveTab("t8");
 const tooltip = document.getElementById("tooltip");
 function showTooltip(evt, html) { tooltip.innerHTML = html; tooltip.classList.add("show"); moveTooltip(evt); }
 function moveTooltip(evt) {
-  const wrap = evt.currentTarget.closest(".chart-wrap");
-  const x = evt.clientX - wrap.getBoundingClientRect().left;
-  const y = evt.clientY - wrap.getBoundingClientRect().top;
-  tooltip.style.left = (wrap.offsetLeft + x) + "px";
-  tooltip.style.top = (wrap.offsetTop + y - 10) + "px";
+  // Coordenadas de viewport puras (clientX/Y) + position:fixed en el
+  // tooltip -- antes se mezclaba offsetLeft/offsetTop (relativos al
+  // offsetParent) con un delta de getBoundingClientRect() (viewport), lo
+  // cual daba por sentado que el offsetParent del chart-wrap era <body>.
+  // Eso se rompió cuando los paneles ".reveal" empezaron a usar transform
+  // para la animación de entrada: un transform en un ancestro lo convierte
+  // en el offsetParent, así que wrap.offsetLeft/Top pasó a ser relativo al
+  // panel en vez de al body, y el tooltip terminaba lejos del mouse. Con
+  // clientX/clientY directo no hay ninguna dependencia del offsetParent.
+  tooltip.style.left = evt.clientX + "px";
+  tooltip.style.top = (evt.clientY - 10) + "px";
 }
 function hideTooltip() { tooltip.classList.remove("show"); }
 

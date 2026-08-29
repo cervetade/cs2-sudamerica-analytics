@@ -237,8 +237,19 @@
   svg .axis-label { fill: var(--ink-muted); font-size: 10.5px; }
   svg .baseline { stroke: var(--baseline); stroke-width: 1; }
   svg .ref-line { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 3 3; }
-  .bar { cursor: pointer; transition: opacity 0.12s; }
+  .bar { cursor: pointer; transition: opacity 0.12s, height 0.55s cubic-bezier(.22,.9,.3,1), y 0.55s cubic-bezier(.22,.9,.3,1), width 0.55s cubic-bezier(.22,.9,.3,1); }
   .bar:hover { opacity: 0.82; }
+  svg .value-label { opacity: 0; transition: opacity 0.35s ease 0.4s; }
+  svg .value-label.show { opacity: 1; }
+
+  /* ---------- aparición de secciones al hacer scroll ---------- */
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .reveal.show { opacity: 1; transform: translateY(0); }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .bar { transition: opacity 0.12s; }
+    svg .value-label { opacity: 1; transition: none; }
+  }
 
   .tooltip {
     position: absolute; pointer-events: none; background: var(--ink-primary); color: var(--surface);
@@ -375,13 +386,13 @@
 
       <div class="stat-row" id="s-resumen"><div class="stat-row" id="stat-row" style="grid-column:1/-1;display:contents"></div></div>
 
-      <section class="panel" id="s-paises">
+      <section class="panel reveal" id="s-paises">
         <div class="panel-head"><h2>Dominancia por país</h2><span class="tag">01</span></div>
         <p class="sub">Jugadores sudamericanos en el top 1000 del ranking FACEIT (región SA), por país</p>
         <div class="chart-wrap" id="chart-paises"></div>
       </section>
 
-      <section class="panel" id="s-aim">
+      <section class="panel reveal" id="s-aim">
         <div class="panel-head"><h2>¿El aim solo alcanza para ganar?</h2><span class="tag">02</span></div>
         <p class="sub">Win rate real según el rango de headshot % y de K/D — la línea punteada marca 50%, lo esperado al azar</p>
         <div class="grid-2">
@@ -391,7 +402,7 @@
         <p class="finding">Los cuatro grupos de headshot % ganan casi lo mismo — <strong>el aim solo no explica las victorias</strong>. El K/D sí importa, y bastante: por debajo de 0.8 la win rate se hunde a 22.5%, arriba de 1.3 sube a 84.6%.</p>
       </section>
 
-      <section class="panel" id="s-desgaste">
+      <section class="panel reveal" id="s-desgaste">
         <div class="panel-head"><h2>El desgaste por partidas largas es real</h2><span class="tag">03</span></div>
         <p class="sub">Rendimiento promedio según la duración real de la partida (excluye partidas de torneo sin duración registrada)</p>
         <div class="grid-2">
@@ -401,26 +412,26 @@
         <p class="finding">El K/D promedio cae de <strong>1.18 a 1.01</strong> y el headshot % de <strong>55.8% a 49.0%</strong> entre partidas cortas (≤30 min) y largas (60+ min).</p>
       </section>
 
-      <section class="panel" id="s-mapas">
+      <section class="panel reveal" id="s-mapas">
         <div class="panel-head"><h2>¿Qué mapa es más parejo?</h2><span class="tag">04</span></div>
         <p class="sub">Diferencia de rondas promedio entre ganador y perdedor, por mapa (mínimo 20 partidas jugadas)</p>
         <div class="chart-wrap" id="chart-mapas"></div>
       </section>
 
-      <section class="panel" id="s-rachas">
+      <section class="panel reveal" id="s-rachas">
         <div class="panel-head"><h2>Rachas activas</h2><span class="tag">05</span></div>
         <p class="sub">Jugadores con más partidas ganadas seguidas ahora mismo — LAG() + patrón "gaps and islands"</p>
         <div class="chart-wrap" id="chart-rachas"></div>
       </section>
 
-      <section class="panel" id="s-revelacion">
+      <section class="panel reveal" id="s-revelacion">
         <div class="panel-head"><h2>Jugadores "revelación"</h2><span class="tag">06</span></div>
         <p class="sub">ELO relativamente bajo para su nivel, pero rendimiento real muy por encima de lo esperado — clic en una columna para ordenar</p>
         <div id="table-revelacion"></div>
         <p class="finding">La lidera <strong>lukaazera</strong> (AR), con K/D 1.5 y un rendimiento muy por encima de lo que su ELO haría esperar. También aparece <strong>coldzera</strong> — el histórico jugador profesional brasileño — con el K/D real más alto de la lista (1.95), aunque esta temporada no lidera el ranking: su ELO ya es alto de base, así que tiene menos margen para "sorprender".</p>
       </section>
 
-      <section class="panel" id="s-mapapais">
+      <section class="panel reveal" id="s-mapapais">
         <div class="panel-head"><h2>El mapa "propio" de cada país</h2><span class="tag">07</span></div>
         <p class="sub">Cuánto se desvía cada país de su propio promedio en cada mapa (no win rate cruda — cada país arranca de un nivel distinto). Verde = mejor que su costumbre, rojo = peor.</p>
         <div class="grid-3">
@@ -431,21 +442,21 @@
         <p class="finding">La intuición decía Argentina-nuke, pero los números dicen otra cosa: <strong>Chile domina de_nuke</strong> muy por encima de su propio promedio (63.9% vs. 54% base, sobre 36 partidas). El mapa fuerte de Argentina es de_cache; el débil, de_anubis. Brasil es el más parejo de los tres — su mayor desvío esta temporada es de apenas -3.3 puntos, en de_inferno.</p>
       </section>
 
-      <section class="panel" id="s-elo">
+      <section class="panel reveal" id="s-elo">
         <div class="panel-head"><h2>ELO promedio por país</h2><span class="tag">08</span></div>
         <p class="sub">¿Brasil domina solo en cantidad de jugadores, o también en nivel? (países con menos de 10 jugadores en la muestra, excluidos)</p>
         <div class="chart-wrap" id="chart-elo"></div>
         <p class="finding">Brasil no solo tiene 3x más jugadores que Argentina en el top 1000 — también tiene el ELO promedio más alto (2689 vs. 2661). La diferencia es chica, pero va en la misma dirección: acá cantidad y calidad van juntas.</p>
       </section>
 
-      <section class="panel" id="s-hora">
+      <section class="panel reveal" id="s-hora">
         <div class="panel-head"><h2>¿A qué hora se juega más CS2 en Sudamérica?</h2><span class="tag">09</span></div>
         <p class="sub">Partidas por franja horaria, aproximado a UTC-3 (horario más común de la región)</p>
         <div class="chart-wrap" id="chart-hora"></div>
         <p class="finding">Casi la mitad de las partidas (45.0%) se juegan entre las 18h y las 23h. Sumando la madrugada (27.7%), el bloque noche + trasnoche se lleva más del 72% del total — entre las 6 y las 11 de la mañana el volumen cae a un 1.6%.</p>
       </section>
 
-      <section class="panel" id="s-temporada8">
+      <section class="panel reveal" id="s-temporada8">
         <div class="panel-head"><h2>¿Esto es casualidad de esta temporada, o se repite?</h2><span class="tag">10</span></div>
         <p class="sub">Los hallazgos de arriba están recortados a la Temporada 9, que recién lleva unas semanas. Acá se comparan contra la Temporada 8 completa y ya cerrada (22 abr – 4 ago 2026) para ver cuáles se sostienen con otra tanda de partidas y otros jugadores.</p>
         <div class="grid-2">
@@ -536,6 +547,27 @@ function hideTooltip() { tooltip.classList.remove("show"); }
 const NS = "http://www.w3.org/2000/svg";
 function el(tag, attrs) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
 
+/* ---------- animación de entrada: barras "creciendo" + labels apareciendo ---------- */
+/* Los rects arrancan en tamaño 0 (pegados a la base). En vez de animarlos ya
+   mismo (que pasaría fuera de pantalla para todo lo que está más abajo del
+   fold), se encolan en el panel ".reveal" que los contiene y se disparan
+   recién cuando ESE panel entra en pantalla (ver revealObserver, al final
+   del script) -- así el gráfico "carga" cuando el usuario llega a verlo, no
+   antes. Si por lo que sea no hay un ".reveal" contenedor, se anima ya. */
+function playEntrance(containerEl, bars, labels) {
+  const run = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        bars.forEach(b => { for (const k in b.final) b.rect.setAttribute(k, b.final[k]); });
+        (labels || []).forEach(l => l && l.classList.add("show"));
+      });
+    });
+  };
+  const panel = containerEl && containerEl.closest(".reveal");
+  if (!panel || panel.classList.contains("show")) { run(); return; }
+  (panel.__pendingBarAnims || (panel.__pendingBarAnims = [])).push(run);
+}
+
 function verticalBars(containerId, items, opts) {
   opts = opts || {};
   const container = document.getElementById(containerId);
@@ -546,30 +578,35 @@ function verticalBars(containerId, items, opts) {
   const n = items.length, gap = 0.38;
   const bw = (width - padSide * 2) / n;
   const svg = el("svg", { width: "100%", height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.ariaLabel || "" });
+  container.innerHTML = ""; container.appendChild(svg);
+  const baseline = height - padBottom;
 
   if (opts.refLine !== undefined) {
-    const y = height - padBottom - (opts.refLine / maxVal) * (height - padTop - padBottom);
+    const y = baseline - (opts.refLine / maxVal) * (height - padTop - padBottom);
     svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: y, y2: y, class: "ref-line" }));
   }
+  const bars = [], labels = [];
   items.forEach((d, i) => {
     const x = padSide + i * bw + bw * gap / 2;
     const barW = bw * (1 - gap);
     const barH = Math.max(2, (d.value / maxVal) * (height - padTop - padBottom));
-    const y = height - padBottom - barH;
-    const rect = el("rect", { x, y, width: barW, height: barH, rx: 3, fill: d.color || "var(--blue)", class: "bar" });
+    const y = baseline - barH;
+    const rect = el("rect", { x, y: baseline, width: barW, height: 0, rx: 3, fill: d.color || "var(--blue)", class: "bar" });
     rect.addEventListener("mouseenter", (e) => showTooltip(e, d.tip || `<b>${d.label}</b>: ${d.value}`));
     rect.addEventListener("mousemove", moveTooltip);
     rect.addEventListener("mouseleave", hideTooltip);
     svg.appendChild(rect);
+    bars.push({ rect, final: { y, height: barH } });
     const vlabel = el("text", { x: x + barW / 2, y: y - 6, "text-anchor": "middle", class: "value-label", "font-size": "12" });
     vlabel.textContent = d.valueLabel !== undefined ? d.valueLabel : d.value;
     svg.appendChild(vlabel);
+    labels.push(vlabel);
     const llabel = el("text", { x: x + barW / 2, y: height - padBottom + 16, "text-anchor": "middle", class: "axis-label" });
     llabel.textContent = d.label;
     svg.appendChild(llabel);
   });
-  svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: height - padBottom, y2: height - padBottom, class: "baseline" }));
-  container.innerHTML = ""; container.appendChild(svg);
+  svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: baseline, y2: baseline, class: "baseline" }));
+  playEntrance(container, bars, labels);
 }
 
 function horizontalBars(containerId, items, opts) {
@@ -581,22 +618,26 @@ function horizontalBars(containerId, items, opts) {
   const height = items.length * rowH + 8;
   const maxVal = opts.max || Math.max(...items.map(d => d.value)) * 1.12;
   const svg = el("svg", { width: "100%", height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.ariaLabel || "" });
+  container.innerHTML = ""; container.appendChild(svg);
+  const bars = [], labels = [];
   items.forEach((d, i) => {
     const y = i * rowH + 6, barH = rowH - 12;
     const barW = Math.max(2, (d.value / maxVal) * (width - padLeft - padRight));
     const label = el("text", { x: padLeft - 8, y: y + barH / 2 + 4, "text-anchor": "end", "font-size": "12" });
     label.textContent = d.label;
     svg.appendChild(label);
-    const rect = el("rect", { x: padLeft, y, width: barW, height: barH, rx: 3, fill: d.color || "var(--blue)", class: "bar" });
+    const rect = el("rect", { x: padLeft, y, width: 0, height: barH, rx: 3, fill: d.color || "var(--blue)", class: "bar" });
     rect.addEventListener("mouseenter", (e) => showTooltip(e, d.tip || `<b>${d.label}</b>: ${d.value}`));
     rect.addEventListener("mousemove", moveTooltip);
     rect.addEventListener("mouseleave", hideTooltip);
     svg.appendChild(rect);
+    bars.push({ rect, final: { width: barW } });
     const vlabel = el("text", { x: padLeft + barW + 8, y: y + barH / 2 + 4, class: "value-label", "font-size": "12" });
     vlabel.textContent = d.valueLabel !== undefined ? d.valueLabel : d.value;
     svg.appendChild(vlabel);
+    labels.push(vlabel);
   });
-  container.innerHTML = ""; container.appendChild(svg);
+  playEntrance(container, bars, labels);
 }
 
 function renderLegend(containerId, series) {
@@ -636,24 +677,27 @@ function groupedBars(containerId, categories, series, opts) {
   const svg = el("svg", { width: "100%", height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.ariaLabel || "" });
   container.innerHTML = ""; container.appendChild(svg); // ya en el DOM: getComputedTextLength() abajo lo necesita
 
+  const bars = [], labels = [];
+  const baseline = height - padBottom;
   categories.forEach((cat, i) => {
     const groupX = padSide + i * groupW;
     const startX = groupX + (groupW - totalBarsW) / 2;
-    let topY = height - padBottom;
+    let topY = baseline;
     const labelParts = [];
     series.forEach((s, si) => {
       const val = s.values[i];
       if (val === null || val === undefined) return;
       const barH = Math.max(2, (val / maxVal) * (height - padTop - padBottom));
       const x = startX + si * (barW + barGap);
-      const y = height - padBottom - barH;
+      const y = baseline - barH;
       topY = Math.min(topY, y);
-      const rect = el("rect", { x, y, width: barW, height: barH, rx: 3, fill: s.color, class: "bar" });
+      const rect = el("rect", { x, y: baseline, width: barW, height: 0, rx: 3, fill: s.color, class: "bar" });
       const tip = s.tip ? s.tip(cat, val) : `<b>${s.name}</b> — ${cat}: ${val}`;
       rect.addEventListener("mouseenter", (e) => showTooltip(e, tip));
       rect.addEventListener("mousemove", moveTooltip);
       rect.addEventListener("mouseleave", hideTooltip);
       svg.appendChild(rect);
+      bars.push({ rect, final: { y, height: barH } });
       labelParts.push({ val, fmt: s.valueLabel ? s.valueLabel(val) : `${val}`, shortFmt: s.shortValueLabel ? s.shortValueLabel(val) : null });
     });
     // Un solo label combinado por grupo (no uno por barra) -- con valores tan
@@ -673,13 +717,17 @@ function groupedBars(containerId, categories, series, opts) {
           glabel.textContent = tryRender(labelParts.map(p => ({ text: p.shortFmt !== null ? p.shortFmt : p.fmt })));
         }
         if (glabel.getComputedTextLength() > availableW) glabel.remove();
+        else labels.push(glabel);
+      } else {
+        labels.push(glabel);
       }
     }
     const llabel = el("text", { x: groupX + groupW / 2, y: height - padBottom + 16, "text-anchor": "middle", class: "axis-label" });
     llabel.textContent = cat;
     svg.appendChild(llabel);
   });
-  svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: height - padBottom, y2: height - padBottom, class: "baseline" }));
+  svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: baseline, y2: baseline, class: "baseline" }));
+  playEntrance(container, bars, labels);
 }
 
 (function () {
@@ -691,9 +739,10 @@ function groupedBars(containerId, categories, series, opts) {
     { num: r.filas_stats.toLocaleString("es-AR"), label: "Filas jugador/mapa" },
   ];
   const box = document.getElementById("stat-row");
-  tiles.forEach(t => {
+  tiles.forEach((t, i) => {
     const div = document.createElement("div");
-    div.className = "stat";
+    div.className = "stat reveal";
+    div.style.transitionDelay = `${i * 0.06}s`;
     div.innerHTML = `<div class="num">${t.num}</div><div class="label">${t.label}</div>`;
     box.appendChild(div);
   });
@@ -857,6 +906,21 @@ verticalBars("chart-elo", DATA.elo_por_pais.map(d => ({
       valueLabel: v => `${v}%`, tip: (cat, v) => `<b>${tc.season9_label}</b> — ${cat}: ${v}% de las partidas` },
   ], { ariaLabel: "Partidas por franja horaria, Temporada 8 vs 9" });
 })();
+
+/* ---------- aparición de secciones y stat tiles al hacer scroll ---------- */
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (!entry.isIntersecting) return;
+    entry.target.classList.add("show");
+    revealObserver.unobserve(entry.target);
+    // dispara las barras que estaban esperando a que este panel se viera (ver playEntrance)
+    if (entry.target.__pendingBarAnims) {
+      entry.target.__pendingBarAnims.forEach(run => run());
+      entry.target.__pendingBarAnims = null;
+    }
+  });
+}, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 });
+document.querySelectorAll(".reveal").forEach(elm => revealObserver.observe(elm));
 
 window.addEventListener("resize", () => { clearTimeout(window.__rz); window.__rz = setTimeout(() => location.reload(), 300); });
 </script>

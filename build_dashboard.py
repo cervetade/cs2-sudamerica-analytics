@@ -25,6 +25,12 @@ SEASON_LABEL = "Temporada 9"
 SEASON_START_ISO = "2026-08-05"  # inicio Temporada 9 (soft ELO reset)
 SEASON_START_EPOCH = 1785888000  # unixepoch de SEASON_START_ISO 00:00 UTC
 
+# Temporada 8 (cerrada) -- para la sección de comparación entre temporadas.
+# A diferencia de la 9, esta ventana ya no se mueve: no hace falta actualizarla.
+SEASON8_LABEL = "Temporada 8"
+SEASON8_FROM_ISO = "2026-04-22"
+SEASON8_TO_ISO = "2026-08-04"
+
 
 def build_data(cur):
     data = {}
@@ -209,6 +215,76 @@ def build_data(cur):
         """, (SEASON_START_EPOCH, SEASON_START_EPOCH)).fetchall()
     ]
 
+    # --------------------------------------------------------------------
+    # Comparación Temporada 8 (cerrada) vs Temporada 9 (en curso). Requiere
+    # haber corrido fetch_season_history.py para la 8 -- si no, T8 sale en 0.
+    # Solo se comparan métricas de PARTIDAS (no ranking/ELO, ver sql/10).
+    # --------------------------------------------------------------------
+    def desgaste_por_temporada(finished_at_filter, params):
+        rows = cur.execute(f"""
+            SELECT CASE WHEN m.duration_minutes <= 30 THEN '<= 30 min' WHEN m.duration_minutes <= 45 THEN '30-45 min'
+                WHEN m.duration_minutes <= 60 THEN '45-60 min' ELSE '60+ min' END AS bucket,
+                ROUND(AVG(mps.kills * 1.0 / NULLIF(mps.deaths, 0)), 2),
+                ROUND(AVG(mps.headshots_percent), 1)
+            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+            WHERE m.has_valid_duration = 1 AND {finished_at_filter}
+            GROUP BY bucket
+        """, params).fetchall()
+        return {r[0]: (r[1], r[2]) for r in rows}
+
+    def hora_pico_por_temporada(finished_at_filter, params):
+        rows = cur.execute(f"""
+            SELECT
+                CASE WHEN hora BETWEEN 6 AND 11 THEN 'Mañana (6-11h)'
+                     WHEN hora BETWEEN 12 AND 17 THEN 'Tarde (12-17h)'
+                     WHEN hora BETWEEN 18 AND 23 THEN 'Noche (18-23h)'
+                     ELSE 'Madrugada (0-5h)' END AS franja,
+                COUNT(*)
+            FROM (
+                SELECT CAST(strftime('%H', datetime(finished_at - 3*3600, 'unixepoch')) AS INTEGER) AS hora
+                FROM matches m WHERE finished_at IS NOT NULL AND {finished_at_filter}
+            )
+            GROUP BY franja
+        """, params).fetchall()
+        total = sum(r[1] for r in rows) or 1
+        return {r[0]: round(100.0 * r[1] / total, 1) for r in rows}
+
+    DUR_BUCKETS = ["<= 30 min", "30-45 min", "45-60 min", "60+ min"]
+    HORA_BUCKETS = ["Mañana (6-11h)", "Tarde (12-17h)", "Noche (18-23h)", "Madrugada (0-5h)"]
+
+    desg_t8 = desgaste_por_temporada(
+        "m.finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)", (SEASON8_FROM_ISO, SEASON8_TO_ISO)
+    )
+    desg_t9 = desgaste_por_temporada("m.finished_at >= ?", (SEASON_START_EPOCH,))
+    hora_t8 = hora_pico_por_temporada(
+        "m.finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)", (SEASON8_FROM_ISO, SEASON8_TO_ISO)
+    )
+    hora_t9 = hora_pico_por_temporada("m.finished_at >= ?", (SEASON_START_EPOCH,))
+
+    data["temporada_comparacion"] = {
+        "season8_label": SEASON8_LABEL,
+        "season9_label": SEASON_LABEL,
+        "partidas_t8": cur.execute(
+            "SELECT COUNT(*) FROM matches WHERE finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)",
+            (SEASON8_FROM_ISO, SEASON8_TO_ISO),
+        ).fetchone()[0],
+        "partidas_t9": cur.execute(
+            "SELECT COUNT(*) FROM matches WHERE finished_at >= ?", (SEASON_START_EPOCH,)
+        ).fetchone()[0],
+        "desgaste": {
+            "categorias": DUR_BUCKETS,
+            "t8_kd": [desg_t8.get(b, (None, None))[0] for b in DUR_BUCKETS],
+            "t9_kd": [desg_t9.get(b, (None, None))[0] for b in DUR_BUCKETS],
+            "t8_hs": [desg_t8.get(b, (None, None))[1] for b in DUR_BUCKETS],
+            "t9_hs": [desg_t9.get(b, (None, None))[1] for b in DUR_BUCKETS],
+        },
+        "hora_pico": {
+            "categorias": HORA_BUCKETS,
+            "t8_pct": [hora_t8.get(b, 0) for b in HORA_BUCKETS],
+            "t9_pct": [hora_t9.get(b, 0) for b in HORA_BUCKETS],
+        },
+    }
+
     return data
 
 
@@ -236,6 +312,7 @@ TEMPLATE = r"""<!doctype html>
     --blue: #2a78d6;
     --blue-wash: #eaf2fc;
     --orange: #eb6834;
+    --t8: #c2410c;   /* Temporada 8 (histórica) en los charts que comparan temporadas -- T9 sigue usando --blue */
     --seq-1: #86b6ef;
     --seq-2: #5598e7;
     --seq-3: #2a78d6;
@@ -285,6 +362,7 @@ TEMPLATE = r"""<!doctype html>
       --blue: #4c94ec;
       --blue-wash: #1c2c40;
       --orange: #e0743c;
+      --t8: #cf6b34;
       --seq-1: #6da7ec;
       --seq-2: #3987e5;
       --seq-3: #256abf;
@@ -441,6 +519,9 @@ TEMPLATE = r"""<!doctype html>
   .grid-3 h3 { font-size: 12px; font-weight: 700; color: var(--ink-secondary); margin: 0 0 8px; text-align: center; }
 
   .chart-wrap { position: relative; }
+  .chart-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 10px; }
+  .chart-legend .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-secondary); }
+  .chart-legend .legend-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
   svg text { fill: var(--ink-secondary); font-family: inherit; }
   svg .value-label { fill: var(--ink-primary); font-weight: 600; }
   svg .axis-label { fill: var(--ink-muted); font-size: 10.5px; }
@@ -534,6 +615,10 @@ TEMPLATE = r"""<!doctype html>
       <a class="nav-item" data-target="s-hora" href="#s-hora">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.3l2.3 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
         Hora pico de juego
+      </a>
+      <a class="nav-item" data-target="s-temporada8" href="#s-temporada8">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 13.5V8.5M6 13.5V4M10 13.5V6.5M14 13.5V2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        Temporada 8 vs. 9
       </a>
     </nav>
 
@@ -648,6 +733,30 @@ TEMPLATE = r"""<!doctype html>
         <p class="sub">Partidas por franja horaria, aproximado a UTC-3 (horario más común de la región)</p>
         <div class="chart-wrap" id="chart-hora"></div>
         <p class="finding">Casi la mitad de las partidas (45.0%) se juegan entre las 18h y las 23h. Sumando la madrugada (27.7%), el bloque noche + trasnoche se lleva más del 72% del total — entre las 6 y las 11 de la mañana el volumen cae a un 1.6%.</p>
+      </section>
+
+      <section class="panel" id="s-temporada8">
+        <div class="panel-head"><h2>¿Esto es casualidad de esta temporada, o se repite?</h2><span class="tag">10</span></div>
+        <p class="sub">Los hallazgos de arriba están recortados a la Temporada 9, que recién lleva unas semanas. Acá se comparan contra la Temporada 8 completa y ya cerrada (22 abr – 4 ago 2026) para ver cuáles se sostienen con otra tanda de partidas y otros jugadores.</p>
+        <div class="grid-2">
+          <div>
+            <div id="legend-desgaste"></div>
+            <div class="chart-wrap" id="chart-t89-kd"></div>
+          </div>
+          <div>
+            <div id="legend-desgaste-hs"></div>
+            <div class="chart-wrap" id="chart-t89-hs"></div>
+          </div>
+        </div>
+        <p class="finding">El desgaste por partidas largas (hallazgo 03) se repite casi calcado: el K/D promedio cae de <strong>1.20 a 1.01</strong> en la Temporada 8 y de <strong>1.18 a 1.01</strong> en la 9 — mismo tramo final, con jugadores y partidas totalmente distintos.</p>
+
+        <div style="margin-top:22px">
+          <div id="legend-hora"></div>
+          <div class="chart-wrap" id="chart-t89-hora"></div>
+        </div>
+        <p class="finding">Los horarios pico (hallazgo 09) también se sostienen: la franja noche (18-23h) se lleva 47.4% de las partidas en la Temporada 8 y 45.2% en la 9 — la forma general de "se juega de noche" no es un capricho de esta temporada.</p>
+
+        <p class="finding">Sobre el mapa propio de cada país (hallazgo 07): <strong>Chile repite a de_nuke</strong> como su mapa fuerte en las dos temporadas (+6.2 puntos sobre su propio promedio en la 8, sobre 107 partidas; +9.9 en la 9). Brasil sigue siendo el más parejo entre mapas en ambas (nunca se desvía más de ±1.7 puntos en la 8, ±3.3 en la 9). Argentina es el caso honesto que no se repite: su mapa fuerte cambió de de_inferno (+4.3, Temporada 8) a de_cache (+8.6, Temporada 9) — no hay una identidad de mapa sólida ahí todavía, así que no se fuerza esa historia.</p>
       </section>
 
     </div>
@@ -778,6 +887,89 @@ function horizontalBars(containerId, items, opts) {
     svg.appendChild(vlabel);
   });
   container.innerHTML = ""; container.appendChild(svg);
+}
+
+function renderLegend(containerId, series) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "chart-legend";
+  series.forEach(s => {
+    const item = document.createElement("span");
+    item.className = "legend-item";
+    item.innerHTML = `<span class="legend-dot" style="background:${s.color}"></span>${s.name}`;
+    row.appendChild(item);
+  });
+  container.appendChild(row);
+}
+
+function groupedBars(containerId, categories, series, opts) {
+  // Barras agrupadas: N categorías en el eje X, cada una con una barra por
+  // serie (acá, Temporada 8 vs Temporada 9). Requiere leyenda (>=2 series,
+  // ver dataviz: "legend siempre presente para 2+ series").
+  opts = opts || {};
+  const container = document.getElementById(containerId);
+  const width = container.clientWidth || 420;
+  const height = opts.height || 250;
+  const padTop = 20, padBottom = 32, padSide = 8;
+  const allVals = series.flatMap(s => s.values).filter(v => v !== null && v !== undefined);
+  const maxVal = opts.max || Math.max(...allVals) * 1.2;
+  const n = categories.length;
+  const groupGap = 0.22; // fraccion del ancho del grupo que queda como aire entre grupos
+  const barGap = 2;      // "surface gap" entre barras de un mismo grupo (ver marks-and-anatomy)
+  const groupW = (width - padSide * 2) / n;
+  const innerW = groupW * (1 - groupGap);
+  const nSeries = series.length;
+  const rawBarW = (innerW - barGap * (nSeries - 1)) / nSeries;
+  const barW = Math.min(24, rawBarW); // <=24px de espesor, nunca llena todo el slot
+  const totalBarsW = barW * nSeries + barGap * (nSeries - 1);
+  const svg = el("svg", { width: "100%", height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.ariaLabel || "" });
+  container.innerHTML = ""; container.appendChild(svg); // ya en el DOM: getComputedTextLength() abajo lo necesita
+
+  categories.forEach((cat, i) => {
+    const groupX = padSide + i * groupW;
+    const startX = groupX + (groupW - totalBarsW) / 2;
+    let topY = height - padBottom;
+    const labelParts = [];
+    series.forEach((s, si) => {
+      const val = s.values[i];
+      if (val === null || val === undefined) return;
+      const barH = Math.max(2, (val / maxVal) * (height - padTop - padBottom));
+      const x = startX + si * (barW + barGap);
+      const y = height - padBottom - barH;
+      topY = Math.min(topY, y);
+      const rect = el("rect", { x, y, width: barW, height: barH, rx: 3, fill: s.color, class: "bar" });
+      const tip = s.tip ? s.tip(cat, val) : `<b>${s.name}</b> — ${cat}: ${val}`;
+      rect.addEventListener("mouseenter", (e) => showTooltip(e, tip));
+      rect.addEventListener("mousemove", moveTooltip);
+      rect.addEventListener("mouseleave", hideTooltip);
+      svg.appendChild(rect);
+      labelParts.push({ val, fmt: s.valueLabel ? s.valueLabel(val) : `${val}`, shortFmt: s.shortValueLabel ? s.shortValueLabel(val) : null });
+    });
+    // Un solo label combinado por grupo (no uno por barra) -- con valores tan
+    // parecidos entre temporadas, dos textos pegados se pisan y se vuelven
+    // ilegibles (ver dataviz: "label selectivamente, nunca un numero en cada
+    // punto"). Si ni la version corta entra en el ancho del grupo, se saca el
+    // label del todo -- el tooltip y la leyenda ya cubren el dato (ver
+    // dataviz: "un label que no entra no se corta, se mide antes").
+    if (labelParts.length) {
+      const availableW = groupW - 4;
+      const tryRender = (parts) => parts.map(p => p.text).join(" · ");
+      const glabel = el("text", { x: groupX + groupW / 2, y: topY - 6, "text-anchor": "middle", class: "value-label", "font-size": "10.5" });
+      glabel.textContent = tryRender(labelParts.map(p => ({ text: p.fmt })));
+      svg.appendChild(glabel);
+      if (glabel.getComputedTextLength() > availableW) {
+        if (labelParts.some(p => p.shortFmt !== null)) {
+          glabel.textContent = tryRender(labelParts.map(p => ({ text: p.shortFmt !== null ? p.shortFmt : p.fmt })));
+        }
+        if (glabel.getComputedTextLength() > availableW) glabel.remove();
+      }
+    }
+    const llabel = el("text", { x: groupX + groupW / 2, y: height - padBottom + 16, "text-anchor": "middle", class: "axis-label" });
+    llabel.textContent = cat;
+    svg.appendChild(llabel);
+  });
+  svg.appendChild(el("line", { x1: padSide, x2: width - padSide, y1: height - padBottom, y2: height - padBottom, class: "baseline" }));
 }
 
 (function () {
@@ -917,6 +1109,43 @@ verticalBars("chart-elo", DATA.elo_por_pais.map(d => ({
     label: d.franja.replace(/\s*\(.*\)/, ""), value: d.pct, valueLabel: `${d.pct}%`, color: "var(--blue)",
     tip: `<b>${d.franja}</b>: ${d.partidas.toLocaleString("es-AR")} partidas (${d.pct}%)`
   })), { ariaLabel: "Partidas por franja horaria" });
+})();
+
+/* --- 10: Temporada 8 vs Temporada 9 --- */
+(function () {
+  const tc = DATA.temporada_comparacion;
+  if (!tc) return;
+  const t8Name = `${tc.season8_label} (${tc.partidas_t8.toLocaleString("es-AR")} partidas)`;
+  const t9Name = `${tc.season9_label} (${tc.partidas_t9.toLocaleString("es-AR")} partidas, en curso)`;
+  const seriesFor = (metricKey, suffix, tipLabel) => [
+    { name: t8Name, color: "var(--t8)", values: tc.desgaste[`t8_${metricKey}`],
+      valueLabel: v => `${v}${suffix}`, shortValueLabel: v => `${v}`,
+      tip: (cat, v) => `<b>${tc.season8_label}</b> — ${cat}: ${tipLabel} ${v}${suffix}` },
+    { name: t9Name, color: "var(--blue)", values: tc.desgaste[`t9_${metricKey}`],
+      valueLabel: v => `${v}${suffix}`, tip: (cat, v) => `<b>${tc.season9_label}</b> — ${cat}: ${tipLabel} ${v}${suffix}` },
+  ];
+
+  renderLegend("legend-desgaste", [
+    { name: tc.season8_label, color: "var(--t8)" }, { name: tc.season9_label, color: "var(--blue)" },
+  ]);
+  groupedBars("chart-t89-kd", tc.desgaste.categorias, seriesFor("kd", "", "K/D promedio"),
+    { ariaLabel: "K/D promedio por duración de partida, Temporada 8 vs 9" });
+
+  renderLegend("legend-desgaste-hs", [
+    { name: tc.season8_label, color: "var(--t8)" }, { name: tc.season9_label, color: "var(--blue)" },
+  ]);
+  groupedBars("chart-t89-hs", tc.desgaste.categorias, seriesFor("hs", "%", "HS% promedio"),
+    { ariaLabel: "Headshot % promedio por duración de partida, Temporada 8 vs 9" });
+
+  renderLegend("legend-hora", [
+    { name: tc.season8_label, color: "var(--t8)" }, { name: tc.season9_label, color: "var(--blue)" },
+  ]);
+  groupedBars("chart-t89-hora", tc.hora_pico.categorias.map(c => c.replace(/\s*\(.*\)/, "")), [
+    { name: t8Name, color: "var(--t8)", values: tc.hora_pico.t8_pct,
+      valueLabel: v => `${v}%`, shortValueLabel: v => `${v}`, tip: (cat, v) => `<b>${tc.season8_label}</b> — ${cat}: ${v}% de las partidas` },
+    { name: t9Name, color: "var(--blue)", values: tc.hora_pico.t9_pct,
+      valueLabel: v => `${v}%`, tip: (cat, v) => `<b>${tc.season9_label}</b> — ${cat}: ${v}% de las partidas` },
+  ], { ariaLabel: "Partidas por franja horaria, Temporada 8 vs 9" });
 })();
 
 window.addEventListener("resize", () => { clearTimeout(window.__rz); window.__rz = setTimeout(() => location.reload(), 300); });

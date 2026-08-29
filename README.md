@@ -54,6 +54,17 @@ En vez de comparar win rate cruda entre países (cada uno arranca de un nivel pr
 
 Agrupando las partidas por franja horaria (aprox. UTC-3): el 45.0% se juega entre las 18h y las 23h, y sumando la madrugada (0-5h, 27.7%) el bloque noche + trasnoche se lleva más del 72% del total. Entre las 6 y las 11 de la mañana el volumen se cae a un 1.6% — casi nadie juega competitivo a esa hora. Ver [`sql/09_hora_pico_de_juego.sql`](./sql/09_hora_pico_de_juego.sql).
 
+### 10. ¿Casualidad de esta temporada, o patrón real? Comparación contra la Temporada 8
+
+Los hallazgos 2 a 9 están recortados a la Temporada 9, que al momento de escribir esto lleva solo unas semanas. Para no quedarse con una sola tanda de datos, se hizo un backfill completo de la Temporada 8 (cerrada, 22 abr – 4 ago 2026, 9.494 partidas) y se compararon las métricas que sí son comparables entre temporadas (partidas — no ranking/ELO, que es una foto del estado actual):
+
+- **El desgaste por partidas largas (hallazgo 3) se repite casi calcado**: el K/D promedio cae de 1.20 a 1.01 en la Temporada 8, y de 1.18 a 1.01 en la 9 — mismo tramo final, con jugadores y partidas totalmente distintos.
+- **Los horarios pico (hallazgo 9) también se sostienen**: la franja noche (18-23h) se lleva 47.4% de las partidas en la Temporada 8 y 45.2% en la 9.
+- **Chile repite a `de_nuke`** como su mapa fuerte en las dos temporadas (+6.2 puntos sobre su propio promedio en la 8, sobre 107 partidas; +9.9 en la 9). Brasil sigue siendo el más parejo entre mapas en ambas.
+- **Lo que no se repite, honestamente**: el mapa fuerte de Argentina cambió de `de_inferno` (+4.3, Temporada 8) a `de_cache` (+8.6, Temporada 9) — no hay ahí una identidad de mapa sólida todavía, así que no se fuerza esa historia.
+
+Ver [`sql/10_comparacion_temporadas.sql`](./sql/10_comparacion_temporadas.sql) y la sección "Analizar una temporada ya cerrada" más abajo para cómo se bajaron estos datos.
+
 ## Cómo se armó
 
 Los datos se extrajeron con [`fetch_faceit_data.py`](./fetch_faceit_data.py) contra la [Data API v4 de FACEIT](https://docs.faceit.com/docs/data-api/), con una API key propia gratuita del [Developer Portal](https://developers.faceit.com/). El pipeline:

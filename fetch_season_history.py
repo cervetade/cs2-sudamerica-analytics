@@ -32,11 +32,22 @@ COMO CORRERLO (en tu compu, o via el workflow de GitHub Actions
 
 Si se corta a mitad de camino, corre de nuevo el mismo comando: los
 match_id que ya estan en matches.csv no se vuelven a pedir.
+
+CORRIENDO DENTRO DE GITHUB ACTIONS: el script detecta que esta en CI
+(variable GITHUB_ACTIONS) y ahi commitea + pushea data/raw/*.csv solo, cada
+CHECKPOINT_EVERY partidas -- no espera a un paso aparte del workflow para
+guardar el progreso. Esto lo hace resumible DE VERDAD ante el limite de
+tiempo de GitHub (6h duro): si se corta, lo bajado hasta el ultimo
+checkpoint ya quedo pusheado, y re-disparar el mismo workflow retoma justo
+despues. (La primera version de este script NO hacia esto -- el commit
+vivia en un paso del .yml que nunca corria si el job se cancelaba por
+timeout, asi que una corrida de 5h30 se perdio entera. Se corrigio.)
 """
 
 import argparse
 import csv
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -67,15 +78,28 @@ DEEP_DIVE_N = 300
 # Techo de partidas por jugador dentro de la ventana de la temporada, para
 # acotar el tiempo total de la corrida (el endpoint permite pedir mucho mas
 # via paginacion, pero un techo generoso alcanza para "toda la temporada de
-# un jugador activo" sin arriesgar corridas de muchisimas horas). Subilo si
-# despues de una corrida ves que algun jugador lo esta tocando seguido.
-MAX_MATCHES_PER_PLAYER = 150
+# un jugador activo" sin arriesgar corridas de muchisimas horas).
+#
+# Bajado de 150 -> 60 despues de que la primera corrida real (300 jugadores
+# x 150 techo) se comiera las 5h30 completas del workflow SIN terminar --
+# con 300 jugadores de por medio, el cuello de botella no es bajar el
+# historial (eso es rapido), es pedir detalle+stats de cada partida UNICA
+# nueva (2 calls por partida), que con miles de partidas de sobra para
+# llenar un job de 6 horas. 60 partidas por jugador a lo largo de una
+# temporada de ~4 meses sigue siendo una muestra solida (bien arriba del
+# piso de 20 que ya veniamos usando en otros hallazgos).
+MAX_MATCHES_PER_PLAYER = 60
 
 HISTORY_PAGE_SIZE = 100  # maximo permitido por la API para /history
 REQUEST_DELAY_SECONDS = 0.6
 
 RAW_DIR = Path(__file__).parent / "data" / "raw"
-CHECKPOINT_EVERY = 200
+CHECKPOINT_EVERY = 150
+
+# True solo cuando esto corre dentro de un workflow de GitHub Actions (la
+# plataforma setea esta variable sola). Se usa para commitear+pushear cada
+# checkpoint automaticamente -- ver git_checkpoint_commit() mas abajo.
+IS_GITHUB_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
 
 # ----------------------------------------------------------------------------
 # HELPERS (mismo patron de reintento que fetch_faceit_data.py)
@@ -150,6 +174,49 @@ def write_csv(name, rows, fieldnames):
     print(f"  guardado: {path} ({len(rows)} filas)")
 
 
+def git_checkpoint_commit(message):
+    """Commitea y pushea data/raw/*.csv tal como estan en este momento.
+
+    SOLO hace algo si IS_GITHUB_ACTIONS -- una corrida local nunca commitea
+    sola sin que el usuario lo pida.
+
+    Por que existe: antes, el commit del backfill vivia en un paso aparte
+    del workflow (despues de correr este script). El problema es que si el
+    job se corta por el limite de tiempo de GitHub (timeout-minutes), ESE
+    paso de despues nunca llega a correr -- pasa a "cancelled" junto con
+    todo lo demas. Eso fue exactamente lo que paso en la primera corrida
+    real: 5h30 bajando datos y, al cortarse por tiempo, cero commits
+    pusheados -- toda la corrida se perdio, y la promesa de "es resumible,
+    correlo de nuevo" no se cumplia en los hechos.
+
+    Con esto, cada vez que se guarda un checkpoint DURANTE la corrida (ver
+    CHECKPOINT_EVERY), tambien se pushea ahi mismo. Si el job se corta,
+    el ultimo checkpoint ya esta en GitHub, y la proxima corrida arranca
+    justo despues -- ahi si es resumible de verdad.
+    """
+    if not IS_GITHUB_ACTIONS:
+        return
+    files = [
+        "data/raw/matches.csv",
+        "data/raw/match_maps.csv",
+        "data/raw/match_player_stats.csv",
+        "data/raw/match_history.csv",
+    ]
+    try:
+        subprocess.run(["git", "add", *files], check=True)
+        nothing_to_commit = subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0
+        if nothing_to_commit:
+            return
+        subprocess.run(["git", "commit", "-m", message], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print(f"  -- checkpoint pusheado a GitHub: {message} --")
+    except subprocess.CalledProcessError as exc:
+        # No corto la corrida por esto -- mejor seguir bajando datos y
+        # reintentar el commit en el proximo checkpoint que si vaya a
+        # tener cambios nuevos para agregar.
+        print(f"  [aviso] no se pudo commitear/pushear el checkpoint ({exc}) -- sigo, reintento en el proximo")
+
+
 def parse_rounds_total(score_str):
     if not score_str:
         return None
@@ -178,6 +245,12 @@ def main():
     ts_from = date_to_epoch(args.from_date)
     ts_to = date_to_epoch(args.to_date)
     print(f"== Backfill Temporada {args.season}: {args.from_date} -> {args.to_date} (UTC) ==")
+
+    if IS_GITHUB_ACTIONS:
+        # Identidad para los commits de checkpoint (antes esto vivia en el
+        # workflow .yml, ahora lo hace el script mismo -- ver git_checkpoint_commit).
+        subprocess.run(["git", "config", "user.name", "github-actions[bot]"])
+        subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"])
 
     players = read_csv_rows("players.csv")
     if not players:
@@ -258,6 +331,13 @@ def main():
             print(f"  [{i}/{len(deep_dive_players)}] {p['nickname']} ({p['country']}) -- {player_matches} partidas en la ventana")
 
     print(f"\nHistorial nuevo: {len(new_history_rows)} filas. Partidas unicas nuevas a bajar detalle: {len(match_ids_to_fetch)}")
+
+    # Checkpoint apenas termina el Paso 1: si el historial de 300 jugadores
+    # tardara mas de lo esperado, esto ya deja pusheado lo bajado hasta aca
+    # (aunque el Paso 2 -- el que de verdad tarda -- todavia no arranco).
+    write_csv("match_history.csv", existing_history + new_history_rows,
+               ["player_id", "match_id", "competition_name", "game_mode", "finished_at"])
+    git_checkpoint_commit(f"Backfill Temporada {args.season}: historial de {len(deep_dive_players)} jugadores")
 
     # --------------------------------------------------------------------
     # Paso 2: detalle de cada partida nueva (igual que fetch_faceit_data.py).
@@ -341,15 +421,19 @@ def main():
                             }
                         )
             if i % CHECKPOINT_EVERY == 0:
-                print(f"  -- checkpoint: guardando progreso parcial ({i} partidas procesadas) --")
+                print(f"  -- checkpoint: guardando progreso parcial ({i}/{len(match_ids_sorted)} partidas procesadas) --")
                 save_progress()
+                git_checkpoint_commit(f"Backfill Temporada {args.season}: checkpoint {i}/{len(match_ids_sorted)} partidas")
     except KeyboardInterrupt:
         print("\n[interrumpido manualmente] guardando lo que se llego a bajar...")
     except Exception as exc:
         print(f"\n[error inesperado: {exc}] guardando lo que se llego a bajar...")
 
     save_progress()
-    print(f"\nListo. Temporada {args.season} backfileada -- corre build_database.py para recargar la base con estos datos.")
+    git_checkpoint_commit(f"Backfill Temporada {args.season}: guardado final de esta corrida")
+    print(f"\nListo (por ahora). Corre build_database.py para recargar la base con estos datos.")
+    print("Si esta corrida se corto antes de llegar al final de la lista de partidas, volve a disparar el mismo")
+    print("workflow con los mismos inputs -- retoma justo donde quedo, no repite nada de lo ya commiteado.")
 
 
 if __name__ == "__main__":

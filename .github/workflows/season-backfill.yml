@@ -6,9 +6,16 @@ name: Backfill de temporada cerrada
 # cerrada no cambia mas, asi que no tiene sentido correrlo seguido. Se usa
 # una vez por temporada que se quiera agregar como analisis historico.
 #
-# Es resumible: si se corta por el limite de 6h de GitHub o por cualquier
-# otro motivo, correlo de nuevo con los mismos inputs -- el script salta
-# todo lo que ya esta en data/raw/ y sigue donde quedo.
+# Es resumible DE VERDAD: el propio fetch_season_history.py commitea y
+# pushea data/raw/*.csv cada pocos minutos mientras corre (no espera a un
+# paso de este workflow para guardar nada). Si se corta por el limite de
+# 6h de GitHub, lo bajado hasta el ultimo checkpoint ya esta en GitHub --
+# volve a disparar este mismo workflow con los mismos inputs y retoma
+# justo donde quedo, no repite nada.
+#
+# (Antes esto no era asi: el commit vivia en un paso aparte que nunca
+# llegaba a correr si el job se cancelaba por timeout. La primera corrida
+# real tardo las 5h30 completas y no llego a pushear nada. Se corrigio.)
 #
 # Necesita el mismo secreto FACEIT_API_KEY que refresh.yml.
 
@@ -42,9 +49,10 @@ jobs:
   backfill:
     runs-on: ubuntu-latest
     # Limite duro de GitHub Actions para runners hosteados: 6h. Dejamos
-    # margen. Si no alcanza, el job corta solo y se puede re-disparar --
-    # el script retoma donde quedo (ver nota arriba).
-    timeout-minutes: 330
+    # margen. Si no alcanza, el job corta solo -- lo bajado hasta ahi ya
+    # quedo pusheado (ver nota de arriba), asi que solo hace falta volver
+    # a disparar el mismo workflow para seguir.
+    timeout-minutes: 350
 
     steps:
       - name: Checkout
@@ -58,22 +66,31 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Backfill de partidas de la temporada
+      - name: Backfill de partidas de la temporada (commitea su propio progreso)
         env:
           FACEIT_API_KEY: ${{ secrets.FACEIT_API_KEY }}
         run: python fetch_season_history.py --season "${{ inputs.season }}" --from "${{ inputs.from_date }}" --to "${{ inputs.to_date }}"
 
+      # if: always() -- para que esto se intente igual aunque el paso de
+      # arriba se haya cortado por el timeout. Los CSV crudos ya estan
+      # pusheados por el propio script; esto solo arma la base SQLite con
+      # lo ultimo que haya en el checkout y la commitea.
       - name: Cargar a SQLite
-        run: python build_database.py
+        if: always()
+        run: |
+          git pull --no-edit
+          python build_database.py
 
-      - name: Commitear los datos crudos + la base (SIN regenerar el dashboard)
+      - name: Commitear la base SQLite
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/raw/matches.csv data/raw/match_maps.csv data/raw/match_player_stats.csv data/raw/match_history.csv data/processed/cs2_sa.db
+          git add data/processed/cs2_sa.db
           if git diff --cached --quiet; then
             echo "Sin cambios -- no hay nada que commitear."
           else
-            git commit -m "Backfill Temporada ${{ inputs.season }} (${{ inputs.from_date }} a ${{ inputs.to_date }})"
+            git commit -m "Backfill Temporada ${{ inputs.season }}: actualiza base SQLite"
+            git pull --rebase --no-edit
             git push
           fi

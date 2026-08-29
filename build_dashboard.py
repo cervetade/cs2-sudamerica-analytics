@@ -32,6 +32,120 @@ SEASON8_FROM_ISO = "2026-04-22"
 SEASON8_TO_ISO = "2026-08-04"
 
 
+def season_findings(cur, where_clause, params):
+    """Recalcula todos los hallazgos basados en PARTIDAS (no en el ranking/ELO,
+    que es una foto del estado actual) recortados a una ventana de tiempo --
+    where_clause es una condición SQL sobre m.finished_at (ej. "m.finished_at
+    >= ?" o "m.finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)"),
+    y params son los parámetros que la completan. Se usa una vez para la
+    Temporada 9 (en curso) y otra para la Temporada 8 (cerrada) -- ver
+    llamadas más abajo -- para poder mostrar cada temporada por separado
+    Y compararlas (sql/10), sin duplicar las queries dos veces a mano.
+    """
+    f = {}
+
+    f["mapas"] = [
+        {"map": r[0].replace("de_", ""), "partidas": r[1], "rondas_promedio": r[2],
+         "diferencia_rondas": r[3], "clasificacion": r[4]}
+        for r in cur.execute(f"""
+            SELECT mm.map, COUNT(*), ROUND(AVG(mm.rounds_total), 1), ROUND(AVG(mm.round_diff), 2),
+                CASE WHEN AVG(mm.round_diff) <= 5 THEN 'Parejo' WHEN AVG(mm.round_diff) <= 8 THEN 'Normal' ELSE 'Desbalanceado' END
+            FROM match_maps mm JOIN matches m ON mm.match_id = m.match_id
+            WHERE mm.round_diff IS NOT NULL AND {where_clause}
+            GROUP BY mm.map HAVING COUNT(*) >= 20
+            ORDER BY 4 ASC
+        """, params).fetchall()
+    ]
+
+    f["hs_vs_winrate"] = [
+        {"rango": r[0], "winrate": r[1]}
+        for r in cur.execute(f"""
+            SELECT CASE WHEN mps.headshots_percent < 30 THEN '< 30%' WHEN mps.headshots_percent < 45 THEN '30-45%'
+                WHEN mps.headshots_percent < 60 THEN '45-60%' ELSE '60%+' END AS rango_hs,
+                ROUND(100.0 * SUM(mps.team_won) / COUNT(*), 1)
+            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+            WHERE mps.headshots_percent IS NOT NULL AND {where_clause}
+            GROUP BY rango_hs ORDER BY MIN(mps.headshots_percent)
+        """, params).fetchall()
+    ]
+
+    f["kd_vs_winrate"] = [
+        {"rango": r[0], "winrate": r[1]}
+        for r in cur.execute(f"""
+            SELECT CASE WHEN mps.deaths = 0 THEN '2.0+' WHEN mps.kills*1.0/mps.deaths < 0.8 THEN '< 0.8'
+                WHEN mps.kills*1.0/mps.deaths < 1.0 THEN '0.8-1.0' WHEN mps.kills*1.0/mps.deaths < 1.3 THEN '1.0-1.3' ELSE '1.3+' END AS rango_kd,
+                ROUND(100.0 * SUM(mps.team_won) / COUNT(*), 1)
+            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+            WHERE {where_clause}
+            GROUP BY rango_kd ORDER BY MIN(mps.kills*1.0/NULLIF(mps.deaths,0))
+        """, params).fetchall()
+    ]
+
+    f["desgaste"] = [
+        {"bucket": r[0], "kd": r[1], "hs": r[2], "n": r[3]}
+        for r in cur.execute(f"""
+            SELECT CASE WHEN m.duration_minutes <= 30 THEN '<= 30 min' WHEN m.duration_minutes <= 45 THEN '30-45 min'
+                WHEN m.duration_minutes <= 60 THEN '45-60 min' ELSE '60+ min' END AS bucket,
+                ROUND(AVG(mps.kills * 1.0 / NULLIF(mps.deaths, 0)), 2),
+                ROUND(AVG(mps.headshots_percent), 1),
+                COUNT(*)
+            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
+            WHERE m.has_valid_duration = 1 AND {where_clause}
+            GROUP BY bucket ORDER BY MIN(m.duration_minutes)
+        """, params).fetchall()
+    ]
+
+    f["mapa_pais"] = [
+        {"pais": r[0], "mapa": r[1].replace("de_", ""), "filas": r[2], "winrate_mapa": r[3],
+         "winrate_base": r[4], "diferencia": r[5]}
+        for r in cur.execute(f"""
+            WITH baseline_pais AS (
+                SELECT p.country, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_base, COUNT(*) AS filas_base
+                FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
+                JOIN matches m ON mps.match_id = m.match_id
+                WHERE p.country IN ('br','ar','cl') AND {where_clause} GROUP BY p.country
+            ),
+            por_mapa AS (
+                SELECT p.country, mps.map, COUNT(*) AS filas, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_mapa
+                FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
+                JOIN matches m ON mps.match_id = m.match_id
+                WHERE p.country IN ('br','ar','cl') AND {where_clause} GROUP BY p.country, mps.map HAVING COUNT(*) >= 30
+            )
+            SELECT UPPER(pm.country), pm.map, pm.filas, pm.winrate_mapa, b.winrate_base,
+                ROUND(pm.winrate_mapa - b.winrate_base, 1)
+            FROM por_mapa pm JOIN baseline_pais b ON pm.country = b.country
+            ORDER BY pm.country, 6 DESC
+        """, params * 2).fetchall()
+    ]
+
+    f["hora_pico"] = [
+        {"franja": r[0], "partidas": r[1], "pct": r[2]}
+        for r in cur.execute(f"""
+            SELECT
+                CASE WHEN hora BETWEEN 6 AND 11 THEN 'Mañana (6-11h)'
+                     WHEN hora BETWEEN 12 AND 17 THEN 'Tarde (12-17h)'
+                     WHEN hora BETWEEN 18 AND 23 THEN 'Noche (18-23h)'
+                     ELSE 'Madrugada (0-5h)' END AS franja,
+                COUNT(*), ROUND(100.0*COUNT(*)/(SELECT COUNT(*) FROM matches m WHERE {where_clause}),1)
+            FROM (
+                SELECT CAST(strftime('%H', datetime(finished_at - 3*3600, 'unixepoch')) AS INTEGER) AS hora
+                FROM matches m WHERE finished_at IS NOT NULL AND {where_clause}
+            )
+            GROUP BY franja ORDER BY 2 DESC
+        """, params * 2).fetchall()
+    ]
+
+    f["total_partidas"] = cur.execute(f"SELECT COUNT(*) FROM matches m WHERE {where_clause}", params).fetchone()[0]
+    f["total_mapas"] = cur.execute(f"""
+        SELECT COUNT(*) FROM match_maps mm JOIN matches m ON mm.match_id = m.match_id WHERE {where_clause}
+    """, params).fetchone()[0]
+    f["filas_stats"] = cur.execute(f"""
+        SELECT COUNT(*) FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id WHERE {where_clause}
+    """, params).fetchone()[0]
+
+    return f
+
+
 def build_data(cur):
     data = {}
 
@@ -45,42 +159,28 @@ def build_data(cur):
         """).fetchall()
     ]
 
-    data["mapas"] = [
-        {"map": r[0].replace("de_", ""), "partidas": r[1], "rondas_promedio": r[2],
-         "diferencia_rondas": r[3], "clasificacion": r[4]}
-        for r in cur.execute("""
-            SELECT mm.map, COUNT(*), ROUND(AVG(mm.rounds_total), 1), ROUND(AVG(mm.round_diff), 2),
-                CASE WHEN AVG(mm.round_diff) <= 5 THEN 'Parejo' WHEN AVG(mm.round_diff) <= 8 THEN 'Normal' ELSE 'Desbalanceado' END
-            FROM match_maps mm JOIN matches m ON mm.match_id = m.match_id
-            WHERE mm.round_diff IS NOT NULL AND m.finished_at >= ?
-            GROUP BY mm.map HAVING COUNT(*) >= 20
-            ORDER BY 4 ASC
-        """, (SEASON_START_EPOCH,)).fetchall()
-    ]
+    # --------------------------------------------------------------------
+    # Hallazgos de partidas, calculados una vez por Temporada 9 (en curso) y
+    # otra por Temporada 8 (cerrada) -- ver season_findings() arriba. Los que
+    # dependen del ranking/ELO actual (dominancia por país, rachas, jugadores
+    # revelación, ELO por país) NO se repiten por temporada porque la tabla
+    # `players` es una sola foto del estado actual (no hay snapshot histórico
+    # del ranking de la Temporada 8).
+    # --------------------------------------------------------------------
+    WHERE_T9 = "m.finished_at >= ?"
+    PARAMS_T9 = (SEASON_START_EPOCH,)
+    WHERE_T8 = "m.finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)"
+    PARAMS_T8 = (SEASON8_FROM_ISO, SEASON8_TO_ISO)
 
-    data["hs_vs_winrate"] = [
-        {"rango": r[0], "winrate": r[1]}
-        for r in cur.execute("""
-            SELECT CASE WHEN mps.headshots_percent < 30 THEN '< 30%' WHEN mps.headshots_percent < 45 THEN '30-45%'
-                WHEN mps.headshots_percent < 60 THEN '45-60%' ELSE '60%+' END AS rango_hs,
-                ROUND(100.0 * SUM(mps.team_won) / COUNT(*), 1)
-            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
-            WHERE mps.headshots_percent IS NOT NULL AND m.finished_at >= ?
-            GROUP BY rango_hs ORDER BY MIN(mps.headshots_percent)
-        """, (SEASON_START_EPOCH,)).fetchall()
-    ]
+    t9 = season_findings(cur, WHERE_T9, PARAMS_T9)
+    t8 = season_findings(cur, WHERE_T8, PARAMS_T8)
 
-    data["kd_vs_winrate"] = [
-        {"rango": r[0], "winrate": r[1]}
-        for r in cur.execute("""
-            SELECT CASE WHEN mps.deaths = 0 THEN '2.0+' WHEN mps.kills*1.0/mps.deaths < 0.8 THEN '< 0.8'
-                WHEN mps.kills*1.0/mps.deaths < 1.0 THEN '0.8-1.0' WHEN mps.kills*1.0/mps.deaths < 1.3 THEN '1.0-1.3' ELSE '1.3+' END AS rango_kd,
-                ROUND(100.0 * SUM(mps.team_won) / COUNT(*), 1)
-            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
-            WHERE m.finished_at >= ?
-            GROUP BY rango_kd ORDER BY MIN(mps.kills*1.0/NULLIF(mps.deaths,0))
-        """, (SEASON_START_EPOCH,)).fetchall()
-    ]
+    data["mapas"] = t9["mapas"]
+    data["mapas_t8"] = t8["mapas"]
+    data["hs_vs_winrate"] = t9["hs_vs_winrate"]
+    data["hs_vs_winrate_t8"] = t8["hs_vs_winrate"]
+    data["kd_vs_winrate"] = t9["kd_vs_winrate"]
+    data["kd_vs_winrate_t8"] = t8["kd_vs_winrate"]
 
     data["jugadores_revelacion"] = [
         {"nickname": r[0], "country": r[1].upper(), "elo": r[2], "mapas_jugados": r[3], "kd_real": r[4],
@@ -134,58 +234,37 @@ def build_data(cur):
         """, (SEASON_START_EPOCH,)).fetchall()
     ]
 
-    data["desgaste"] = [
-        {"bucket": r[0], "kd": r[1], "hs": r[2], "n": r[3]}
-        for r in cur.execute("""
-            SELECT CASE WHEN m.duration_minutes <= 30 THEN '<= 30 min' WHEN m.duration_minutes <= 45 THEN '30-45 min'
-                WHEN m.duration_minutes <= 60 THEN '45-60 min' ELSE '60+ min' END AS bucket,
-                ROUND(AVG(mps.kills * 1.0 / NULLIF(mps.deaths, 0)), 2),
-                ROUND(AVG(mps.headshots_percent), 1),
-                COUNT(*)
-            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
-            WHERE m.has_valid_duration = 1 AND m.finished_at >= ?
-            GROUP BY bucket ORDER BY MIN(m.duration_minutes)
-        """, (SEASON_START_EPOCH,)).fetchall()
-    ]
+    data["desgaste"] = t9["desgaste"]
+    data["desgaste_t8"] = t8["desgaste"]
 
+    total_jugadores = cur.execute("SELECT COUNT(*) FROM players").fetchone()[0]
+    jugadores_sa = cur.execute("SELECT COUNT(*) FROM players WHERE is_sa_country=1").fetchone()[0]
+
+    # jugadores_sa/total_jugadores son del roster ACTUAL (no hay snapshot por
+    # temporada), así que se repiten igual en resumen y resumen_t8.
     data["resumen"] = {
-        "total_jugadores": cur.execute("SELECT COUNT(*) FROM players").fetchone()[0],
-        "jugadores_sa": cur.execute("SELECT COUNT(*) FROM players WHERE is_sa_country=1").fetchone()[0],
-        "total_partidas": cur.execute("SELECT COUNT(*) FROM matches WHERE finished_at >= ?", (SEASON_START_EPOCH,)).fetchone()[0],
-        "total_mapas": cur.execute("""
-            SELECT COUNT(*) FROM match_maps mm JOIN matches m ON mm.match_id = m.match_id
-            WHERE m.finished_at >= ?
-        """, (SEASON_START_EPOCH,)).fetchone()[0],
-        "filas_stats": cur.execute("""
-            SELECT COUNT(*) FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
-            WHERE m.finished_at >= ?
-        """, (SEASON_START_EPOCH,)).fetchone()[0],
+        "total_jugadores": total_jugadores,
+        "jugadores_sa": jugadores_sa,
+        "total_partidas": t9["total_partidas"],
+        "total_mapas": t9["total_mapas"],
+        "filas_stats": t9["filas_stats"],
         "season_label": SEASON_LABEL,
         "season_start": SEASON_START_ISO,
     }
 
-    data["mapa_pais"] = [
-        {"pais": r[0], "mapa": r[1].replace("de_", ""), "filas": r[2], "winrate_mapa": r[3],
-         "winrate_base": r[4], "diferencia": r[5]}
-        for r in cur.execute("""
-            WITH baseline_pais AS (
-                SELECT p.country, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_base, COUNT(*) AS filas_base
-                FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
-                JOIN matches m ON mps.match_id = m.match_id
-                WHERE p.country IN ('br','ar','cl') AND m.finished_at >= ? GROUP BY p.country
-            ),
-            por_mapa AS (
-                SELECT p.country, mps.map, COUNT(*) AS filas, ROUND(100.0*SUM(mps.team_won)/COUNT(*), 1) AS winrate_mapa
-                FROM match_player_stats mps JOIN players p ON mps.player_id = p.player_id
-                JOIN matches m ON mps.match_id = m.match_id
-                WHERE p.country IN ('br','ar','cl') AND m.finished_at >= ? GROUP BY p.country, mps.map HAVING COUNT(*) >= 30
-            )
-            SELECT UPPER(pm.country), pm.map, pm.filas, pm.winrate_mapa, b.winrate_base,
-                ROUND(pm.winrate_mapa - b.winrate_base, 1)
-            FROM por_mapa pm JOIN baseline_pais b ON pm.country = b.country
-            ORDER BY pm.country, 6 DESC
-        """, (SEASON_START_EPOCH, SEASON_START_EPOCH)).fetchall()
-    ]
+    data["resumen_t8"] = {
+        "total_jugadores": total_jugadores,
+        "jugadores_sa": jugadores_sa,
+        "total_partidas": t8["total_partidas"],
+        "total_mapas": t8["total_mapas"],
+        "filas_stats": t8["filas_stats"],
+        "season_label": SEASON8_LABEL,
+        "season_start": SEASON8_FROM_ISO,
+        "season_end": SEASON8_TO_ISO,
+    }
+
+    data["mapa_pais"] = t9["mapa_pais"]
+    data["mapa_pais_t8"] = t8["mapa_pais"]
 
     data["elo_por_pais"] = [
         {"pais": r[0], "jugadores": r[1], "elo_promedio": r[2],
@@ -198,90 +277,39 @@ def build_data(cur):
         """).fetchall()
     ]
 
-    data["hora_pico"] = [
-        {"franja": r[0], "partidas": r[1], "pct": r[2]}
-        for r in cur.execute("""
-            SELECT
-                CASE WHEN hora BETWEEN 6 AND 11 THEN 'Mañana (6-11h)'
-                     WHEN hora BETWEEN 12 AND 17 THEN 'Tarde (12-17h)'
-                     WHEN hora BETWEEN 18 AND 23 THEN 'Noche (18-23h)'
-                     ELSE 'Madrugada (0-5h)' END AS franja,
-                COUNT(*), ROUND(100.0*COUNT(*)/(SELECT COUNT(*) FROM matches WHERE finished_at >= ?),1)
-            FROM (
-                SELECT CAST(strftime('%H', datetime(finished_at - 3*3600, 'unixepoch')) AS INTEGER) AS hora
-                FROM matches WHERE finished_at IS NOT NULL AND finished_at >= ?
-            )
-            GROUP BY franja ORDER BY 2 DESC
-        """, (SEASON_START_EPOCH, SEASON_START_EPOCH)).fetchall()
-    ]
+    data["hora_pico"] = t9["hora_pico"]
+    data["hora_pico_t8"] = t8["hora_pico"]
 
     # --------------------------------------------------------------------
-    # Comparación Temporada 8 (cerrada) vs Temporada 9 (en curso). Requiere
-    # haber corrido fetch_season_history.py para la 8 -- si no, T8 sale en 0.
-    # Solo se comparan métricas de PARTIDAS (no ranking/ELO, ver sql/10).
+    # Comparación Temporada 8 (cerrada) vs Temporada 9 (en curso). Reutiliza
+    # los mismos resultados de t8/t9 de arriba -- una sola fuente de verdad,
+    # nada de repetir las queries. Solo se comparan métricas de PARTIDAS (no
+    # ranking/ELO, ver sql/10).
     # --------------------------------------------------------------------
-    def desgaste_por_temporada(finished_at_filter, params):
-        rows = cur.execute(f"""
-            SELECT CASE WHEN m.duration_minutes <= 30 THEN '<= 30 min' WHEN m.duration_minutes <= 45 THEN '30-45 min'
-                WHEN m.duration_minutes <= 60 THEN '45-60 min' ELSE '60+ min' END AS bucket,
-                ROUND(AVG(mps.kills * 1.0 / NULLIF(mps.deaths, 0)), 2),
-                ROUND(AVG(mps.headshots_percent), 1)
-            FROM match_player_stats mps JOIN matches m ON mps.match_id = m.match_id
-            WHERE m.has_valid_duration = 1 AND {finished_at_filter}
-            GROUP BY bucket
-        """, params).fetchall()
-        return {r[0]: (r[1], r[2]) for r in rows}
-
-    def hora_pico_por_temporada(finished_at_filter, params):
-        rows = cur.execute(f"""
-            SELECT
-                CASE WHEN hora BETWEEN 6 AND 11 THEN 'Mañana (6-11h)'
-                     WHEN hora BETWEEN 12 AND 17 THEN 'Tarde (12-17h)'
-                     WHEN hora BETWEEN 18 AND 23 THEN 'Noche (18-23h)'
-                     ELSE 'Madrugada (0-5h)' END AS franja,
-                COUNT(*)
-            FROM (
-                SELECT CAST(strftime('%H', datetime(finished_at - 3*3600, 'unixepoch')) AS INTEGER) AS hora
-                FROM matches m WHERE finished_at IS NOT NULL AND {finished_at_filter}
-            )
-            GROUP BY franja
-        """, params).fetchall()
-        total = sum(r[1] for r in rows) or 1
-        return {r[0]: round(100.0 * r[1] / total, 1) for r in rows}
-
     DUR_BUCKETS = ["<= 30 min", "30-45 min", "45-60 min", "60+ min"]
     HORA_BUCKETS = ["Mañana (6-11h)", "Tarde (12-17h)", "Noche (18-23h)", "Madrugada (0-5h)"]
 
-    desg_t8 = desgaste_por_temporada(
-        "m.finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)", (SEASON8_FROM_ISO, SEASON8_TO_ISO)
-    )
-    desg_t9 = desgaste_por_temporada("m.finished_at >= ?", (SEASON_START_EPOCH,))
-    hora_t8 = hora_pico_por_temporada(
-        "m.finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)", (SEASON8_FROM_ISO, SEASON8_TO_ISO)
-    )
-    hora_t9 = hora_pico_por_temporada("m.finished_at >= ?", (SEASON_START_EPOCH,))
+    desg_t8_map = {d["bucket"]: d for d in t8["desgaste"]}
+    desg_t9_map = {d["bucket"]: d for d in t9["desgaste"]}
+    hora_t8_map = {d["franja"]: d for d in t8["hora_pico"]}
+    hora_t9_map = {d["franja"]: d for d in t9["hora_pico"]}
 
     data["temporada_comparacion"] = {
         "season8_label": SEASON8_LABEL,
         "season9_label": SEASON_LABEL,
-        "partidas_t8": cur.execute(
-            "SELECT COUNT(*) FROM matches WHERE finished_at BETWEEN strftime('%s', ?) AND strftime('%s', ?)",
-            (SEASON8_FROM_ISO, SEASON8_TO_ISO),
-        ).fetchone()[0],
-        "partidas_t9": cur.execute(
-            "SELECT COUNT(*) FROM matches WHERE finished_at >= ?", (SEASON_START_EPOCH,)
-        ).fetchone()[0],
+        "partidas_t8": t8["total_partidas"],
+        "partidas_t9": t9["total_partidas"],
         "desgaste": {
             "categorias": DUR_BUCKETS,
-            "t8_kd": [desg_t8.get(b, (None, None))[0] for b in DUR_BUCKETS],
-            "t9_kd": [desg_t9.get(b, (None, None))[0] for b in DUR_BUCKETS],
-            "t8_hs": [desg_t8.get(b, (None, None))[1] for b in DUR_BUCKETS],
-            "t9_hs": [desg_t9.get(b, (None, None))[1] for b in DUR_BUCKETS],
+            "t8_kd": [desg_t8_map[b]["kd"] if b in desg_t8_map else None for b in DUR_BUCKETS],
+            "t9_kd": [desg_t9_map[b]["kd"] if b in desg_t9_map else None for b in DUR_BUCKETS],
+            "t8_hs": [desg_t8_map[b]["hs"] if b in desg_t8_map else None for b in DUR_BUCKETS],
+            "t9_hs": [desg_t9_map[b]["hs"] if b in desg_t9_map else None for b in DUR_BUCKETS],
         },
         "hora_pico": {
             "categorias": HORA_BUCKETS,
-            "t8_pct": [hora_t8.get(b, 0) for b in HORA_BUCKETS],
-            "t9_pct": [hora_t9.get(b, 0) for b in HORA_BUCKETS],
+            "t8_pct": [hora_t8_map[b]["pct"] if b in hora_t8_map else 0 for b in HORA_BUCKETS],
+            "t9_pct": [hora_t9_map[b]["pct"] if b in hora_t9_map else 0 for b in HORA_BUCKETS],
         },
     }
 
@@ -478,6 +506,24 @@ TEMPLATE = r"""<!doctype html>
   }
   .btn-primary:hover { opacity: 0.92; }
 
+  .tab-switch {
+    display: inline-flex; gap: 3px; background: var(--page); border: 1px solid var(--border);
+    padding: 3px; border-radius: 10px; margin: 18px 32px 0;
+  }
+  .tab-btn {
+    appearance: none; border: none; background: transparent; color: var(--ink-secondary);
+    font-family: inherit; font-weight: 600; font-size: 12.5px; padding: 8px 16px;
+    border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 7px;
+  }
+  .tab-btn .tab-btn-sub {
+    font-weight: 500; font-size: 10px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .tab-btn.active { background: var(--surface); color: var(--ink-primary); border: 1px solid var(--border); }
+  .tab-btn.active .tab-btn-sub { color: var(--blue); }
+  .tab-btn:not(.active):hover { color: var(--ink-primary); }
+  .tab-hidden { display: none !important; }
+  @media (max-width: 880px) { .tab-switch { margin-left: 16px; margin-right: 16px; } }
+
   .content { max-width: 980px; padding: 24px 32px 100px; }
 
   .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 24px; }
@@ -585,9 +631,37 @@ TEMPLATE = r"""<!doctype html>
       <div class="name">CS2 Sudamérica<span>Analytics</span></div>
     </div>
 
-    <div class="nav-label">Hallazgos</div>
-    <nav class="nav-list" id="nav-list">
-      <a class="nav-item" data-target="s-resumen" href="#s-resumen">
+    <div class="nav-label" id="nav-label-t8">Hallazgos — Temporada 8</div>
+    <nav class="nav-list" id="nav-list-t8" data-tab="t8">
+      <a class="nav-item" data-target="s-resumen-t8" href="#s-resumen-t8">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/></svg>
+        Resumen
+      </a>
+      <a class="nav-item" data-target="s-mapas-t8" href="#s-mapas-t8">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4l4-1.4 4 1.4 4-1.4v9.8l-4 1.4-4-1.4-4 1.4V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6 2.6v9.8M10 4v9.8" stroke="currentColor" stroke-width="1.3"/></svg>
+        Mapas
+      </a>
+      <a class="nav-item" data-target="s-aim-t8" href="#s-aim-t8">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>
+        Aim vs. win rate
+      </a>
+      <a class="nav-item" data-target="s-desgaste-t8" href="#s-desgaste-t8">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.8V8l2.4 1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        Desgaste
+      </a>
+      <a class="nav-item" data-target="s-mapapais-t8" href="#s-mapapais-t8">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4l4-1.4 4 1.4 4-1.4v9.8l-4 1.4-4-1.4-4 1.4V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6 2.6v9.8M10 4v9.8" stroke="currentColor" stroke-width="1.3"/></svg>
+        Mapa por país
+      </a>
+      <a class="nav-item" data-target="s-hora-t8" href="#s-hora-t8">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.3l2.3 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        Hora pico de juego
+      </a>
+    </nav>
+
+    <div class="nav-label tab-hidden" id="nav-label-t9">Hallazgos — Temporada 9</div>
+    <nav class="nav-list tab-hidden" id="nav-list-t9" data-tab="t9">
+      <a class="nav-item" data-target="s-resumen-t9" href="#s-resumen-t9">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/></svg>
         Resumen
       </a>
@@ -663,8 +737,8 @@ TEMPLATE = r"""<!doctype html>
   <main>
     <div class="topbar">
       <div>
-        <h1>Dashboard <span class="season-badge">Temporada 9</span></h1>
-        <p>CS2 competitivo en Sudamérica — hallazgos navegables, sin correr una sola query. Partidas desde el inicio de la Temporada 9 de FACEIT (5 ago 2026); ranking/ELO reflejan el estado actual.</p>
+        <h1>Dashboard <span class="season-badge" id="season-badge">Temporada 8</span></h1>
+        <p id="header-sub">CS2 competitivo en Sudamérica — hallazgos navegables, sin correr una sola query. Temporada 8 completa y cerrada (22 abr – 4 ago 2026): la muestra más grande y estable para sacar conclusiones.</p>
       </div>
       <a class="btn-primary" href="https://github.com/cervetade/cs2-sudamerica-analytics" target="_blank" rel="noopener">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -672,9 +746,66 @@ TEMPLATE = r"""<!doctype html>
       </a>
     </div>
 
+    <div class="tab-switch" role="tablist" id="tab-switch">
+      <button class="tab-btn active" data-tab="t8" role="tab" aria-selected="true">Temporada 8<span class="tab-btn-sub">cerrada</span></button>
+      <button class="tab-btn" data-tab="t9" role="tab" aria-selected="false">Temporada 9<span class="tab-btn-sub">en curso</span></button>
+    </div>
+
     <div class="content">
 
-      <div class="stat-row" id="s-resumen"><div class="stat-row" id="stat-row" style="grid-column:1/-1;display:contents"></div></div>
+      <div class="tab-panel" data-tab="t8" id="tab-panel-t8">
+
+      <div class="stat-row" id="s-resumen-t8"><div class="stat-row" id="stat-row-t8" style="grid-column:1/-1;display:contents"></div></div>
+
+      <section class="panel reveal" id="s-mapas-t8">
+        <div class="panel-head"><h2>¿Qué mapa es más parejo?</h2><span class="tag">01</span></div>
+        <p class="sub">Diferencia de rondas promedio entre ganador y perdedor, por mapa (mínimo 20 partidas jugadas) — Temporada 8 completa</p>
+        <div class="chart-wrap" id="chart-mapas-t8"></div>
+      </section>
+
+      <section class="panel reveal" id="s-aim-t8">
+        <div class="panel-head"><h2>¿El aim solo alcanza para ganar?</h2><span class="tag">02</span></div>
+        <p class="sub">Win rate real según el rango de headshot % y de K/D — la línea punteada marca 50%, lo esperado al azar (Temporada 8 completa)</p>
+        <div class="grid-2">
+          <div><div class="chart-wrap" id="chart-hs-t8"></div></div>
+          <div><div class="chart-wrap" id="chart-kd-t8"></div></div>
+        </div>
+        <p class="finding" id="finding-aim-t8"></p>
+      </section>
+
+      <section class="panel reveal" id="s-desgaste-t8">
+        <div class="panel-head"><h2>El desgaste por partidas largas es real</h2><span class="tag">03</span></div>
+        <p class="sub">Rendimiento promedio según la duración real de la partida (excluye partidas de torneo sin duración registrada) — Temporada 8 completa</p>
+        <div class="grid-2">
+          <div><div class="chart-wrap" id="chart-desgaste-kd-t8"></div></div>
+          <div><div class="chart-wrap" id="chart-desgaste-hs-t8"></div></div>
+        </div>
+        <p class="finding" id="finding-desgaste-t8"></p>
+      </section>
+
+      <section class="panel reveal" id="s-mapapais-t8">
+        <div class="panel-head"><h2>El mapa "propio" de cada país</h2><span class="tag">04</span></div>
+        <p class="sub">Cuánto se desvía cada país de su propio promedio en cada mapa, sobre la Temporada 8 completa. Verde = mejor que su costumbre, rojo = peor.</p>
+        <div class="grid-3">
+          <div><h3>Argentina</h3><div class="chart-wrap" id="chart-mapapais-ar-t8"></div></div>
+          <div><h3>Brasil</h3><div class="chart-wrap" id="chart-mapapais-br-t8"></div></div>
+          <div><h3>Chile</h3><div class="chart-wrap" id="chart-mapapais-cl-t8"></div></div>
+        </div>
+        <p class="finding">Chile domina de_nuke muy por encima de su propio promedio; Brasil es el más parejo de los tres. Ver la sección "Temporada 8 vs. 9" para el detalle completo y qué tan sólido es cada patrón.</p>
+      </section>
+
+      <section class="panel reveal" id="s-hora-t8">
+        <div class="panel-head"><h2>¿A qué hora se juega más CS2 en Sudamérica?</h2><span class="tag">05</span></div>
+        <p class="sub">Partidas por franja horaria, aproximado a UTC-3 (horario más común de la región) — Temporada 8 completa</p>
+        <div class="chart-wrap" id="chart-hora-t8"></div>
+        <p class="finding" id="finding-hora-t8"></p>
+      </section>
+
+      </div>
+
+      <div class="tab-panel tab-hidden" data-tab="t9" id="tab-panel-t9">
+
+      <div class="stat-row" id="s-resumen-t9"><div class="stat-row" id="stat-row-t9" style="grid-column:1/-1;display:contents"></div></div>
 
       <section class="panel reveal" id="s-paises">
         <div class="panel-head"><h2>Dominancia por país</h2><span class="tag">01</span></div>
@@ -770,6 +901,8 @@ TEMPLATE = r"""<!doctype html>
         <p class="finding">Sobre el mapa propio de cada país (hallazgo 07): <strong>Chile repite a de_nuke</strong> como su mapa fuerte en las dos temporadas (+6.2 puntos sobre su propio promedio en la 8, sobre 107 partidas; +9.9 en la 9). Brasil sigue siendo el más parejo entre mapas en ambas (nunca se desvía más de ±1.7 puntos en la 8, ±3.3 en la 9). Argentina es el caso honesto que no se repite: su mapa fuerte cambió de de_inferno (+4.3, Temporada 8) a de_cache (+8.6, Temporada 9) — no hay una identidad de mapa sólida ahí todavía, así que no se fuerza esa historia.</p>
       </section>
 
+      </div>
+
     </div>
   </main>
 </div>
@@ -821,6 +954,50 @@ const spy = new IntersectionObserver((entries) => {
   });
 }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
 sections.forEach(s => spy.observe(s));
+
+/* ---------- tab switch: Temporada 8 (cerrada) / Temporada 9 (en curso) ---------- */
+const HEADER_TEXT = {
+  t8: "CS2 competitivo en Sudamérica — hallazgos navegables, sin correr una sola query. Temporada 8 completa y cerrada (22 abr – 4 ago 2026): la muestra más grande y estable para sacar conclusiones.",
+  t9: "CS2 competitivo en Sudamérica — hallazgos navegables, sin correr una sola query. Partidas desde el inicio de la Temporada 9 de FACEIT (5 ago 2026); ranking/ELO reflejan el estado actual.",
+};
+const seasonBadge = document.getElementById("season-badge");
+const headerSub = document.getElementById("header-sub");
+const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
+const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
+const navGroups = {
+  t8: [document.getElementById("nav-label-t8"), document.getElementById("nav-list-t8")],
+  t9: [document.getElementById("nav-label-t9"), document.getElementById("nav-list-t9")],
+};
+
+function setActiveTab(tab) {
+  tabButtons.forEach(b => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  tabPanels.forEach(p => p.classList.toggle("tab-hidden", p.dataset.tab !== tab));
+  Object.entries(navGroups).forEach(([k, els]) => els.forEach(el => el && el.classList.toggle("tab-hidden", k !== tab)));
+  seasonBadge.textContent = tab === "t8" ? "Temporada 8" : "Temporada 9";
+  headerSub.textContent = HEADER_TEXT[tab];
+  // Los paneles recién visibles pueden no haber disparado todavía el
+  // revealObserver (algunos navegadores no vuelven a chequear la
+  // intersección solo por un cambio de display) -- se fuerza un re-chequeo
+  // manual de lo que ya está en viewport apenas se cambia de pestaña.
+  requestAnimationFrame(() => {
+    document.querySelectorAll(`.tab-panel[data-tab="${tab}"] .reveal`).forEach(elm => {
+      if (elm.classList.contains("show")) return;
+      const rect = elm.getBoundingClientRect();
+      if (rect.top < window.innerHeight * 0.92 && rect.bottom > 0) {
+        elm.classList.add("show");
+        revealObserver.unobserve(elm);
+        if (elm.__pendingBarAnims) { elm.__pendingBarAnims.forEach(run => run()); elm.__pendingBarAnims = null; }
+      }
+    });
+  });
+  if (mq.matches) closeSidebar();
+}
+tabButtons.forEach(b => b.addEventListener("click", () => setActiveTab(b.dataset.tab)));
+setActiveTab("t8");
 
 /* ---------- tooltip ---------- */
 const tooltip = document.getElementById("tooltip");
@@ -1020,15 +1197,14 @@ function groupedBars(containerId, categories, series, opts) {
   playEntrance(container, bars, labels);
 }
 
-(function () {
-  const r = DATA.resumen;
+function renderResumen(boxId, r) {
   const tiles = [
     { num: r.jugadores_sa.toLocaleString("es-AR"), label: "Jugadores SA en el top 1000" },
     { num: r.total_partidas.toLocaleString("es-AR"), label: "Partidas analizadas" },
     { num: r.total_mapas.toLocaleString("es-AR"), label: "Mapas jugados" },
     { num: r.filas_stats.toLocaleString("es-AR"), label: "Filas jugador/mapa" },
   ];
-  const box = document.getElementById("stat-row");
+  const box = document.getElementById(boxId);
   tiles.forEach((t, i) => {
     const div = document.createElement("div");
     div.className = "stat reveal";
@@ -1036,9 +1212,93 @@ function groupedBars(containerId, categories, series, opts) {
     div.innerHTML = `<div class="num">${t.num}</div><div class="label">${t.label}</div>`;
     box.appendChild(div);
   });
-})();
+}
+renderResumen("stat-row-t8", DATA.resumen_t8);
+renderResumen("stat-row-t9", DATA.resumen);
 
 const countryColors = { BR: "var(--c-br)", AR: "var(--c-ar)", CL: "var(--c-cl)", UY: "var(--c-uy)", PY: "var(--c-py)", VE: "var(--c-ve)", PE: "var(--c-pe)", BO: "var(--c-bo)" };
+
+/* ==================== TEMPORADA 8 (cerrada) ==================== */
+
+const mapasT8Sorted = [...DATA.mapas_t8].sort((a, b) => a.diferencia_rondas - b.diferencia_rondas);
+horizontalBars("chart-mapas-t8", mapasT8Sorted.map((d, i) => ({
+  label: `de_${d.map}` + (i === 0 ? "  ★" : ""), value: d.diferencia_rondas, valueLabel: d.diferencia_rondas,
+  color: `var(--m-de_${d.map}, var(--blue))`,
+  tip: `<b>de_${d.map}</b>: diferencia de ${d.diferencia_rondas} rondas en promedio (${d.partidas} partidas, ${d.clasificacion})`
+})), { max: Math.max(...mapasT8Sorted.map(d => d.diferencia_rondas)) * 1.15, ariaLabel: "Diferencia de rondas por mapa, Temporada 8" });
+
+const seqColorsT8 = ["var(--seq-1)", "var(--seq-2)", "var(--seq-3)", "var(--seq-4)"];
+verticalBars("chart-hs-t8", DATA.hs_vs_winrate_t8.map((d, i) => ({
+  label: d.rango, value: d.winrate, valueLabel: `${d.winrate}%`, color: seqColorsT8[i],
+  tip: `<b>HS% ${d.rango}</b>: ${d.winrate}% win rate`
+})), { max: 58, refLine: 50, ariaLabel: "Win rate por rango de headshot %, Temporada 8" });
+
+const seq5ColorsT8 = ["var(--seq5-1)", "var(--seq5-2)", "var(--seq5-3)", "var(--seq5-4)", "var(--seq5-5)"];
+const kdOrderT8 = ["< 0.8", "0.8-1.0", "1.0-1.3", "1.3+", "2.0+"];
+const kdSortedT8 = kdOrderT8.map(r => DATA.kd_vs_winrate_t8.find(d => d.rango === r)).filter(Boolean);
+verticalBars("chart-kd-t8", kdSortedT8.map((d, i) => ({
+  label: d.rango, value: d.winrate, valueLabel: `${d.winrate}%`, color: seq5ColorsT8[i],
+  tip: `<b>K/D ${d.rango}</b>: ${d.winrate}% win rate`
+})), { max: 95, refLine: 50, ariaLabel: "Win rate por rango de K/D, Temporada 8" });
+
+(function () {
+  // "2.0+" queda afuera a propósito -- muy pocas filas (K/D so'lo con 0
+  // muertes en toda la partida), el 50% que da no es un dato robusto (le
+  // pasa lo mismo en las dos temporadas, ver kd_vs_winrate vs. _t8). El
+  // mismo criterio que ya se usaba en el hallazgo original de la Temporada 9.
+  const hs = DATA.hs_vs_winrate_t8;
+  const kdLow = DATA.kd_vs_winrate_t8.find(d => d.rango === "< 0.8");
+  const kdHigh = DATA.kd_vs_winrate_t8.find(d => d.rango === "1.3+");
+  const hsSpread = (Math.max(...hs.map(d => d.winrate)) - Math.min(...hs.map(d => d.winrate))).toFixed(1);
+  document.getElementById("finding-aim-t8").innerHTML =
+    `Los grupos de headshot % ganan parecido (spread de apenas ${hsSpread} puntos) — <strong>el aim solo no explica las victorias</strong>. El K/D sí importa: por debajo de ${kdLow.rango} la win rate cae a ${kdLow.winrate}%, arriba de ${kdHigh.rango} sube a ${kdHigh.winrate}%.`;
+})();
+
+verticalBars("chart-desgaste-kd-t8", DATA.desgaste_t8.map(d => ({
+  label: d.bucket, value: d.kd, valueLabel: d.kd, color: "var(--blue)",
+  tip: `<b>${d.bucket}</b>: K/D promedio ${d.kd} (n=${d.n.toLocaleString("es-AR")})`
+})), { ariaLabel: "K/D promedio por duración de partida, Temporada 8" });
+verticalBars("chart-desgaste-hs-t8", DATA.desgaste_t8.map(d => ({
+  label: d.bucket, value: d.hs, valueLabel: `${d.hs}%`, color: "var(--orange)",
+  tip: `<b>${d.bucket}</b>: HS% promedio ${d.hs}% (n=${d.n.toLocaleString("es-AR")})`
+})), { ariaLabel: "Headshot % promedio por duración de partida, Temporada 8" });
+
+(function () {
+  const d = DATA.desgaste_t8, first = d[0], last = d[d.length - 1];
+  document.getElementById("finding-desgaste-t8").innerHTML =
+    `El K/D promedio cae de <strong>${first.kd} a ${last.kd}</strong> y el headshot % de <strong>${first.hs}% a ${last.hs}%</strong> entre partidas cortas (${first.bucket}) y largas (${last.bucket}), sobre ${d.reduce((a, x) => a + x.n, 0).toLocaleString("es-AR")} filas jugador/partida.`;
+})();
+
+(function () {
+  const byCountry = { AR: [], BR: [], CL: [] };
+  DATA.mapa_pais_t8.forEach(d => { if (byCountry[d.pais]) byCountry[d.pais].push(d); });
+  Object.keys(byCountry).forEach(pais => {
+    const rows = [...byCountry[pais]].sort((a, b) => b.diferencia - a.diferencia);
+    horizontalBars(`chart-mapapais-${pais.toLowerCase()}-t8`, rows.map(d => ({
+      label: `de_${d.mapa}`,
+      value: Math.abs(d.diferencia),
+      valueLabel: (d.diferencia > 0 ? "+" : "") + d.diferencia,
+      color: d.diferencia >= 0 ? "var(--diverge-pos)" : "var(--diverge-neg)",
+      tip: `<b>de_${d.mapa}</b>: ${d.winrate_mapa}% win rate (promedio de ${pais}: ${d.winrate_base}%) — ${d.filas} filas`
+    })), { rowH: 26, padLeft: 84, max: 8, ariaLabel: `Desviación por mapa, ${pais}, Temporada 8` });
+  });
+})();
+
+(function () {
+  const order = ["Madrugada (0-5h)", "Mañana (6-11h)", "Tarde (12-17h)", "Noche (18-23h)"];
+  const rows = order.map(f => DATA.hora_pico_t8.find(d => d.franja === f)).filter(Boolean);
+  verticalBars("chart-hora-t8", rows.map(d => ({
+    label: d.franja.replace(/\s*\(.*\)/, ""), value: d.pct, valueLabel: `${d.pct}%`, color: "var(--blue)",
+    tip: `<b>${d.franja}</b>: ${d.partidas.toLocaleString("es-AR")} partidas (${d.pct}%)`
+  })), { ariaLabel: "Partidas por franja horaria, Temporada 8" });
+  const noche = rows.find(d => d.franja.startsWith("Noche"));
+  const madrugada = rows.find(d => d.franja.startsWith("Madrugada"));
+  const nocheYMadrugada = (noche.pct + madrugada.pct).toFixed(1);
+  document.getElementById("finding-hora-t8").innerHTML =
+    `Casi la mitad de las partidas (${noche.pct}%) se juegan entre las 18h y las 23h. Sumando la madrugada (${madrugada.pct}%), el bloque noche + trasnoche se lleva ${nocheYMadrugada}% del total, sobre ${DATA.resumen_t8.total_partidas.toLocaleString("es-AR")} partidas de la temporada completa.`;
+})();
+
+/* ==================== TEMPORADA 9 (en curso) ==================== */
 verticalBars("chart-paises", DATA.dominancia_por_pais.map(d => ({
   label: d.country, value: d.n, valueLabel: `${d.n}`, color: countryColors[d.country] || "var(--blue)",
   tip: `<b>${d.country}</b>: ${d.n} jugadores (${d.pct}%)`
